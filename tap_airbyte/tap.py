@@ -355,6 +355,7 @@ class TapAirbyte(Tap):
 
         if self.config.get("native_source_python"):
             args.extend(["-p", self.config["native_source_python"]])
+        args.append('--system-site-packages')
         args.append(str(self.native_venv_path))
 
         # Run the virtualenv command
