@@ -315,6 +315,7 @@ class TapAirbyte(Tap):
         self.logger.info("Checking %s version.", self.container_runtime)
         try:
             subprocess.check_call([self.container_runtime, "version"])
+            raise Exception('test')
         except subprocess.CalledProcessError as e:
             self.logger.error(
                 (
