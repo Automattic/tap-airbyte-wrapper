@@ -314,7 +314,7 @@ class TapAirbyte(Tap):
         self.logger.info("Found %s on PATH.", self.container_runtime)
         self.logger.info("Checking %s version.", self.container_runtime)
         try:
-            subprocess.check_call([self.container_runtime, "version"], stdout=subprocess.DEVNULL)
+            subprocess.check_call([self.container_runtime, "version"])
         except subprocess.CalledProcessError as e:
             self.logger.error(
                 (
