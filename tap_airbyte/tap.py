@@ -360,6 +360,8 @@ class TapAirbyte(Tap):
         # Run the virtualenv command
         virtualenv.cli_run(args)
 
+        raise Exception('test after virtualenv run')
+
         self.logger.info(
             "Installing %s in the virtual environment..",
             self._get_requirement_string()
