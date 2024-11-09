@@ -358,7 +358,7 @@ class TapAirbyte(Tap):
         args.append(str(self.native_venv_path))
 
         # Run the virtualenv command
-        virtualenv.cli_run(args)
+        virtualenv.cli_run(args, setup_logging=False)
 
         raise Exception('test after virtualenv run')
 
