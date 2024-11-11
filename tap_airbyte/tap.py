@@ -355,7 +355,6 @@ class TapAirbyte(Tap):
 
         if self.config.get("native_source_python"):
             args.extend(["-p", self.config["native_source_python"]])
-        args.append('--system-site-packages')
         args.append(str(self.native_venv_path))
 
         # Run the virtualenv command
@@ -369,6 +368,14 @@ class TapAirbyte(Tap):
         subprocess.run(
             [self.native_venv_bin_path / "pip", "install",
              self._get_requirement_string()],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT
+        )
+
+        subprocess.run(
+            [self.native_venv_bin_path / "pip", "install",
+             "pendulum==2.1.2"],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT
