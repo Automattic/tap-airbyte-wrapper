@@ -34,7 +34,7 @@ def run_yarn_service(config: dict, command: str, catalog: dict = None):
     if not yarn_config or not docker_mount:
         raise MissingConfigException("Missing required 'yarn_config' or 'docker_mount' in config")
     service_config = {
-      "name": f"airbyte-service-{airbyte_image.split('/')[-1]}:{airbyte_tag}-{datetime.now().strftime('%Y%m%d_%H%M')}",
+      "name": f"airbyte-service-{airbyte_image.split('/')[-1]}:{airbyte_tag}-{datetime.now().strftime('%Y%m%d%H%M')}",
       "version": "1.0",
       "components" :
         [
