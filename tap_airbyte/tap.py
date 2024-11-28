@@ -179,6 +179,45 @@ class TapAirbyte(Tap):
             th.StringType,
             required=False,
             description="Path to Python executable to use.",
+        ),
+        th.Property(
+            "yarn_service_config",
+            th.ObjectType(
+                th.Property(
+                    "base_url",
+                    th.StringType,
+                    required=True,
+                    description="YARN RM base URL",
+                ),
+                th.Property(
+                    "username",
+                    th.StringType,
+                    required=True,
+                    description="YARN RM username",
+                ),
+                th.Property(
+                    "password",
+                    th.StringType,
+                    required=True,
+                    secret=True,
+                    description="YARN RM password",
+                ),
+                th.Property(
+                    "extra_headers",
+                    th.ObjectType(),
+                    required=False,
+                    description="Extra headers to pass to the YARN"
+                ),
+                th.Property(
+                    "queue",
+                    th.StringType,
+                    required=True,
+                    description="YARN queue to submit the service to (default: default)",
+                )
+            ),
+            required=False,
+            description="Set up a YARN service config for running the Airbyte container. Use only if you want to run "
+                        "the Airbyte container as a YARN service.",
         )
 
     ).to_dict()
@@ -303,6 +342,8 @@ class TapAirbyte(Tap):
 
     def _ensure_oci(self) -> None:
         """Ensure that the OCI runtime is installed and available."""
+        if self.run_on_yarn:
+            return # Skip OCI check if running on YARN
         self.logger.info("Checking for %s on PATH.", self.container_runtime)
         if not shutil.which(self.container_runtime):
             self.logger.error(
@@ -327,6 +368,11 @@ class TapAirbyte(Tap):
             )
             sys.exit(1)
         self.logger.info("Successfully executed %s version.", self.container_runtime)
+
+    @property
+    def run_on_yarn(self) -> bool:
+        """Check if the connector should be run on YARN."""
+        return bool(self.config.get("yarn_service_config"))
 
     @property
     def native_venv_path(self) -> Path:
@@ -358,7 +404,7 @@ class TapAirbyte(Tap):
         args.append(str(self.native_venv_path))
 
         # Run the virtualenv command
-        virtualenv.cli_run(args, setup_logging=False)
+        virtualenv.cli_run(args)
 
         self.logger.info(
             "Installing %s in the virtual environment..",
@@ -368,14 +414,6 @@ class TapAirbyte(Tap):
         subprocess.run(
             [self.native_venv_bin_path / "pip", "install",
              self._get_requirement_string()],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT
-        )
-
-        subprocess.run(
-            [self.native_venv_bin_path / "pip", "install",
-             "pendulum==2.1.2"],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT
@@ -426,10 +464,15 @@ class TapAirbyte(Tap):
             self._ensure_oci()
         return is_native
 
+    # def _to_yarn_command(self, *airbyte_cmd: str):
+
+
     def to_command(
             self, *airbyte_cmd: str, docker_args: t.Optional[t.List[str]] = None
     ) -> t.List[t.Union[str, Path]]:
         """Construct the command to run the Airbyte connector."""
+        # if self.run_on_yarn:
+        #     return self._to_yarn_command(*airbyte_cmd)
         return (
             [self.venv / "bin" / self.source_name, *airbyte_cmd]
             if self.is_native()
