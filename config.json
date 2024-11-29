@@ -1,9 +1,0 @@
-{
-  "airbyte_spec": {
-    "image": "airbyte/source-pokeapi",
-    "tag": "0.1.5"
-  },
-  "airbyte_config": {
-      "pokemon_name": "smeargle"
-  }
-}
