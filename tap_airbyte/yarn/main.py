@@ -44,8 +44,9 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     airbyte_image = config['airbyte_spec'].get('image')
     airbyte_tag = config['airbyte_spec'].get('tag', 'latest')
     airbyte_mount_dir = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
+    name = f"airbyte-{airbyte_image.split('/')[-1]}-{airbyte_tag}-{datetime.now().strftime('%Y%m%d%H%M')}"
     service_config = {
-      "name": f"airbyte-service-{airbyte_image.split('/')[-1]}-{airbyte_tag}-{datetime.now().strftime('%Y%m%d%H%M')}",
+      "name": name,
       "version": "1.0",
       "components" :
         [
@@ -67,7 +68,8 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
             "configuration": {
                 "env": {
                     "YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true",
-                    "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS": f"{runtime_tmp_dir}:{airbyte_mount_dir}:rw"
+                    "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS": f"{runtime_tmp_dir}:{airbyte_mount_dir}:rw",
+                    "YARN_CONTAINER_RUNTIME_DOCKER_CONTAINER_HOSTNAME": name[:63], # hostname should have less than 63 characters
                 },
                 "properties": {
                     "yarn.service.default-readiness-check.enabled": "false",
