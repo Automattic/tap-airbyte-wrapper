@@ -1,29 +1,49 @@
 import json
+import os
 import time
 import argparse
 
 from main import get_yarn_service_application_info, is_yarn_app_terminated, is_yarn_app_failed
 
+def wait_for_file(file_path, timeout=60, interval=1):
+    """
+    Waits for a file to be created within a specified timeout.
+
+    :param file_path: Path to the file to wait for.
+    :param timeout: Maximum time to wait for the file, in seconds.
+    :param interval: Time between checks, in seconds.
+    :return: True if the file is created, False if the timeout is reached.
+    """
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if os.path.exists(file_path):
+            # File found
+            return True
+        time.sleep(interval)
+    return False  # Timeout reached
 
 def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     """
     Stream a file line by line until the callback function returns a value.
     """
-    with open(file_path, 'r') as file:
-        # Move to the end of the file for streaming new content
-        file.seek(0, 2)
-        while True:
-            line = file.readline()
-            if not line:  # If at EOF, wait for more content
-                time.sleep(1)
-                app_info = get_yarn_service_application_info(yarn_config, app_id)
-                if is_yarn_app_terminated(app_info):
-                    if is_yarn_app_failed(app_info):
-                        raise Exception(f"Yarn application {app_id} failed.")
-                    exit(0)
-                continue
+    if wait_for_file(file_path):
+        with open(file_path, 'r') as file:
+            # Move to the end of the file for streaming new content
+            file.seek(0, 2)
+            while True:  # Streaming loop
+                line = file.readline()
+                if not line:  # If at EOF, wait for more content
+                    time.sleep(1)
+                    app_info = get_yarn_service_application_info(yarn_config, app_id)
+                    if is_yarn_app_terminated(app_info):
+                        if is_yarn_app_failed(app_info):
+                            raise Exception(f"Yarn application {app_id} failed.")
+                        exit(0)
+                    continue
 
-            print(line, end='')
+                print(line, end='')
+    else:
+        raise Exception(f"File not found: {file_path}")
 
 
 def main():
