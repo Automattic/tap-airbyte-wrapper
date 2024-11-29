@@ -45,7 +45,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     airbyte_tag = config['airbyte_spec'].get('tag', 'latest')
     airbyte_mount_dir = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
     service_config = {
-      "name": f"airbyte-service-{airbyte_image.split('/')[-1]}:{airbyte_tag}-{datetime.now().strftime('%Y%m%d%H%M')}",
+      "name": f"airbyte-service-{airbyte_image.split('/')[-1]}-{airbyte_tag}-{datetime.now().strftime('%Y%m%d%H%M')}",
       "version": "1.0",
       "components" :
         [
