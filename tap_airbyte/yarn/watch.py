@@ -2,7 +2,7 @@ import json
 import time
 import argparse
 
-from .main import get_yarn_service_application_info, is_yarn_app_terminated, is_yarn_app_failed
+from main import get_yarn_service_application_info, is_yarn_app_terminated, is_yarn_app_failed
 
 
 def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
