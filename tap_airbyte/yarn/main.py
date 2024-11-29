@@ -1,8 +1,9 @@
 import json
+import os
 from datetime import datetime
 from functools import cache
 from time import sleep
-from typing import TypedDict
+from typing import TypedDict, Mapping, Any
 from tenacity import retry, stop_after_delay, wait_fixed
 
 import requests
@@ -21,8 +22,6 @@ class YarnConfig(TypedDict):
     password: str
     extra_headers: dict
     queue: str
-    mount_source: str
-    mount_target: str
 
 
 class YarnApplicationInfo(TypedDict):
@@ -40,13 +39,14 @@ def _create_session(yarn_config: YarnConfig):
     session.headers.update({"Content-Type": "application/json"} | yarn_config.get('extra_headers', {}))
     return session
 
-def run_yarn_service(config: dict, command: str) -> str:
+def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: str) -> str:
     """
     Run a service on YARN with the given command and return the application id
     """
     yarn_config: YarnConfig = config.get('yarn_config')
     airbyte_image = config['airbyte_spec'].get('image')
     airbyte_tag = config['airbyte_spec'].get('tag', 'latest')
+    airbyte_mount_dir = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
     service_config = {
       "name": f"airbyte-service-{airbyte_image.split('/')[-1]}:{airbyte_tag}-{datetime.now().strftime('%Y%m%d%H%M')}",
       "version": "1.0",
@@ -62,7 +62,7 @@ def run_yarn_service(config: dict, command: str) -> str:
             },
             # Redirect the stdout to a file so it can be read by Meltano
             # config and catalog files should be place on the mounted volume
-            "launch_command": f'"python main.py {command} > {yarn_config["mount_target"]}/stdout"',
+            "launch_command": f'"python main.py {command} > {airbyte_mount_dir}/stdout"',
             "resource": {
               "cpus": 2,
               "memory": "1024"
@@ -70,7 +70,7 @@ def run_yarn_service(config: dict, command: str) -> str:
             "configuration": {
                 "env": {
                     "YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true",
-                    "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS": f"{yarn_config['mount_source']}:{yarn_config['mount_target']}:rw"
+                    "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS": f"{runtime_tmp_dir}:{airbyte_mount_dir}:rw"
                 },
                 "properties": {
                     "yarn.service.default-readiness-check.enabled": "false",
