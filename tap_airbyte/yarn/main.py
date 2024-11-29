@@ -40,8 +40,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     """
     Run a service on YARN with the given command and return the application id
     """
-    raise Exception(config)
-    yarn_config: YarnConfig = config.get('yarn_service_config')
+    yarn_config: YarnConfig = config['yarn_service_config']
     airbyte_image = config['airbyte_spec'].get('image')
     airbyte_tag = config['airbyte_spec'].get('tag', 'latest')
     airbyte_mount_dir = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
