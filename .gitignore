@@ -138,3 +138,5 @@ dmypy.json
 .vscode/*
 .venv-*/*
 tap_airbyte/.venv-*/*
+config.json
+.env
