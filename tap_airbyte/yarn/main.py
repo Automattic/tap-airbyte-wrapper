@@ -40,6 +40,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     """
     Run a service on YARN with the given command and return the application id
     """
+    raise Exception(config)
     yarn_config: YarnConfig = config.get('yarn_service_config')
     airbyte_image = config['airbyte_spec'].get('image')
     airbyte_tag = config['airbyte_spec'].get('tag', 'latest')
@@ -89,7 +90,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
         "queue": yarn_config.get('queue', 'default')
     }
     session = _create_session(yarn_config)
-    url = f"{yarn_config.get('base_url')}/app/v1/services"
+    url = f"{yarn_config['base_url']}/app/v1/services"
     logger.info('Creating YARN service...')
     logger.info('Config: %s', service_config) # tests
     response = session.post(url, json=service_config)
