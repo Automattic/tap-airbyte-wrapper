@@ -1,6 +1,9 @@
 import json
 from datetime import datetime
+from functools import cache
+from time import sleep
 from typing import TypedDict
+from tenacity import retry, stop_after_delay, wait_fixed
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -9,15 +12,26 @@ from requests.auth import HTTPBasicAuth
 class MissingConfigException(Exception):
     pass
 
+YARN_APP_FAILED_STATES = {'FAILED', 'KILLED'}
+YARN_APP_TERMINAL_STATES = {'FINISHED'} | YARN_APP_FAILED_STATES
+
 class YarnConfig(TypedDict):
     base_url: str
     username: str
     password: str
     extra_headers: dict
     queue: str
-    mount_src: str
-    mount_dest: str
+    mount_source: str
+    mount_target: str
 
+
+class YarnApplicationInfo(TypedDict):
+    id: str  # pylint: disable=invalid-name
+    state: str
+    finalStatus: str
+
+
+@cache
 def _create_session(yarn_config: YarnConfig):
     session = requests.Session()
     if not yarn_config:
@@ -26,13 +40,13 @@ def _create_session(yarn_config: YarnConfig):
     session.headers.update({"Content-Type": "application/json"} | yarn_config.get('extra_headers', {}))
     return session
 
-def run_yarn_service(config: dict, command: str, catalog: dict = None):
+def run_yarn_service(config: dict, command: str) -> str:
+    """
+    Run a service on YARN with the given command and return the application id
+    """
     yarn_config: YarnConfig = config.get('yarn_config')
     airbyte_image = config['airbyte_spec'].get('image')
     airbyte_tag = config['airbyte_spec'].get('tag', 'latest')
-    docker_mount = config.get('docker_mount')
-    if not yarn_config or not docker_mount:
-        raise MissingConfigException("Missing required 'yarn_config' or 'docker_mount' in config")
     service_config = {
       "name": f"airbyte-service-{airbyte_image.split('/')[-1]}:{airbyte_tag}-{datetime.now().strftime('%Y%m%d%H%M')}",
       "version": "1.0",
@@ -46,7 +60,9 @@ def run_yarn_service(config: dict, command: str, catalog: dict = None):
                 "id": f"{airbyte_image}:{airbyte_tag}",
                 "type": "DOCKER"
             },
-            "launch_command": command,
+            # Redirect the stdout to a file so it can be read by Meltano
+            # config and catalog files should be place on the mounted volume
+            "launch_command": f'"python main.py {command} > {yarn_config["mount_target"]}/stdout"',
             "resource": {
               "cpus": 2,
               "memory": "1024"
@@ -54,26 +70,14 @@ def run_yarn_service(config: dict, command: str, catalog: dict = None):
             "configuration": {
                 "env": {
                     "YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true",
-                    "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS": f"{docker_mount.get('source')}:{docker_mount.get('target')}:rw"
+                    "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS": f"{yarn_config['mount_source']}:{yarn_config['mount_target']}:rw"
                 },
                 "properties": {
                     "yarn.service.default-readiness-check.enabled": "false",
                     "yarn.service.container-state-report-as-service-state": "true",
                     "dns.check.enabled": "false",
                     "docker.network": "bridge"
-                },
-                "files": [
-                    {
-                        "type": "JSON",
-                        "dest_file": "/tmp/config.json",
-                        "properties": config.get("airbyte_config", {})
-                    },
-                    {
-                        "type": "JSON",
-                        "dest_file": "/tmp/catalog.json",
-                        "properties": catalog or {}
-                    }
-                ]
+                }
             }
           }
         ],
@@ -91,5 +95,43 @@ def run_yarn_service(config: dict, command: str, catalog: dict = None):
     session = _create_session(config)
     url = f"{yarn_config.get('base_url')}/app/v1/services"
     response = session.post(url, data=json.dumps(service_config))
+    response.raise_for_status()
+    service_uri = response.json().get('uri')
+    app_id = _get_yarn_service_app_id(config, service_uri)
+    return app_id
+
+
+def _get_yarn_service_app_id(config: dict, service_uri: str) -> str:
+    """
+    Get the application id of the given service
+    """
+    session = _create_session(config.get('yarn_config'))
+    url = f"{config.get('yarn_config').get('base_url')}/app/{service_uri}"
+    response = session.get(url)
+    app_id = None
+    while not app_id:
+        app_id = response.json().get('id')
+        if response.json().get('state', 'STOPPED') == 'STOPPED':
+            raise Exception(f"Yarn Service stopped before start the application: {response.json()}")
+        sleep(1) # control the requests
+    return app_id
+
+
+def is_yarn_app_terminated(yarn_app: YarnApplicationInfo) -> bool:
+    return bool(yarn_app and yarn_app.get('state') in YARN_APP_TERMINAL_STATES)
+
+
+def is_yarn_app_failed(yarn_app: YarnApplicationInfo) -> bool:
+    return yarn_app.get('finalStatus') != 'SUCCEEDED'
+
+
+@retry(reraise=True, stop=stop_after_delay(60), wait=wait_fixed(3))
+def get_yarn_service_application_info(yarn_config: YarnConfig, app_id: str) -> YarnApplicationInfo:
+    """
+    Get the application info of the given service
+    """
+    session = _create_session(yarn_config)
+    url = f"{yarn_config.get('base_url')}/ws/v1/cluster/apps/{app_id}"
+    response = session.get(url)
     response.raise_for_status()
     return response.json()

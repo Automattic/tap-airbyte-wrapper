@@ -213,7 +213,19 @@ class TapAirbyte(Tap):
                     th.StringType,
                     required=True,
                     description="YARN queue to submit the service to (default: default)",
-                )
+                ),
+                th.Property(
+                    "mount_source",
+                    th.StringType,
+                    required=True,
+                    description="Source path to mount",
+                ),
+                th.Property(
+                    "mount_target",
+                    th.StringType,
+                    required=True,
+                    description="Target path to mount",
+                ),
             ),
             required=False,
             description="Set up a YARN service config for running the Airbyte container. Use only if you want to run "
@@ -464,15 +476,17 @@ class TapAirbyte(Tap):
             self._ensure_oci()
         return is_native
 
-    # def _to_yarn_command(self, *airbyte_cmd: str):
+    def _to_yarn_command(self, *airbyte_cmd: str):
+        with TemporaryDirectory(self.config['yarn_service_config']['mount_source']) as host_tmpdir:
+
 
 
     def to_command(
-            self, *airbyte_cmd: str, docker_args: t.Optional[t.List[str]] = None
+            self, *airbyte_cmd: str, runtime_conf_dir: str, docker_args: t.Optional[t.List[str]] = None
     ) -> t.List[t.Union[str, Path]]:
         """Construct the command to run the Airbyte connector."""
-        # if self.run_on_yarn:
-        #     return self._to_yarn_command(*airbyte_cmd)
+        if self.run_on_yarn:
+            return self._to_yarn_command(*airbyte_cmd)
         return (
             [self.venv / "bin" / self.source_name, *airbyte_cmd]
             if self.is_native()
