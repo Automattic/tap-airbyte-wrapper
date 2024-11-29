@@ -59,7 +59,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
             },
             # Redirect the stdout to a file so it can be read by Meltano
             # config and catalog files should be place on the mounted volume
-            "launch_command": f'"python main.py {command} > {airbyte_mount_dir}/stdout"',
+            "launch_command": f'"python main.py {command} > {runtime_tmp_dir}/stdout"',
             "resource": {
               "cpus": 2,
               "memory": "1024"
@@ -67,7 +67,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
             "configuration": {
                 "env": {
                     "YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true",
-                    "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS": f"{runtime_tmp_dir}:{airbyte_mount_dir}:rw"
+                    "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS": f"{airbyte_mount_dir}:{airbyte_mount_dir}:rw"
                 },
                 "properties": {
                     "yarn.service.default-readiness-check.enabled": "false",
