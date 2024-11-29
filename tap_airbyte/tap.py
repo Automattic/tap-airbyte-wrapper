@@ -213,7 +213,7 @@ class TapAirbyte(Tap):
                 th.Property(
                     "queue",
                     th.StringType,
-                    required=True,
+                    default="default",
                     description="YARN queue to submit the service to (default: default)",
                 ),
             ),
