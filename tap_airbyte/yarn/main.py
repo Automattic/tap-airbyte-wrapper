@@ -1,17 +1,18 @@
 import json
 import os
 from datetime import datetime
-from functools import cache
 from time import sleep
 from typing import TypedDict, Mapping, Any
+import logging
+
+from requests import Session
 from tenacity import retry, stop_after_delay, wait_fixed
 
 import requests
 from requests.auth import HTTPBasicAuth
 
+logger = logging.getLogger(__name__)
 
-class MissingConfigException(Exception):
-    pass
 
 YARN_APP_FAILED_STATES = {'FAILED', 'KILLED'}
 YARN_APP_TERMINAL_STATES = {'FINISHED'} | YARN_APP_FAILED_STATES
@@ -30,11 +31,8 @@ class YarnApplicationInfo(TypedDict):
     finalStatus: str
 
 
-@cache
-def _create_session(yarn_config: YarnConfig):
+def _create_session(yarn_config: YarnConfig) -> Session:
     session = requests.Session()
-    if not yarn_config:
-        raise MissingConfigException("Missing required 'yarn_config' in config")
     session.auth = HTTPBasicAuth(yarn_config.get('username'), yarn_config.get('password'))
     session.headers.update({"Content-Type": "application/json"} | yarn_config.get('extra_headers', {}))
     return session
@@ -43,7 +41,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     """
     Run a service on YARN with the given command and return the application id
     """
-    yarn_config: YarnConfig = config.get('yarn_config')
+    yarn_config: YarnConfig = config.get('yarn_service_config')
     airbyte_image = config['airbyte_spec'].get('image')
     airbyte_tag = config['airbyte_spec'].get('tag', 'latest')
     airbyte_mount_dir = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
@@ -91,22 +89,25 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
         },
         "queue": yarn_config.get('queue', 'default')
     }
-
-    session = _create_session(config)
+    session = _create_session(yarn_config)
     url = f"{yarn_config.get('base_url')}/app/v1/services"
+    logger.info('Creating YARN service...')
+    logger.debug('Config: %')
     response = session.post(url, data=json.dumps(service_config))
     response.raise_for_status()
     service_uri = response.json().get('uri')
-    app_id = _get_yarn_service_app_id(config, service_uri)
+    logger.info('YARN service created with uri: %', service_uri)
+    app_id = _get_yarn_service_app_id(yarn_config, service_uri)
+    logger.info('YARN service started with app_id: %', app_id)
     return app_id
 
 
-def _get_yarn_service_app_id(config: dict, service_uri: str) -> str:
+def _get_yarn_service_app_id(yarn_config: dict, service_uri: str) -> str:
     """
     Get the application id of the given service
     """
-    session = _create_session(config.get('yarn_config'))
-    url = f"{config.get('yarn_config').get('base_url')}/app/{service_uri}"
+    session = _create_session(yarn_config.get('yarn_service_config'))
+    url = f"{yarn_config.get('yarn_service_config').get('base_url')}/app/{service_uri}"
     response = session.get(url)
     app_id = None
     while not app_id:
