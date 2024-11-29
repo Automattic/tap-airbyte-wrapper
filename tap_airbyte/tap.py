@@ -471,7 +471,7 @@ class TapAirbyte(Tap):
         Run the Airbyte connector on YARN and return the command to watch the output file.
         """
         app_id = run_yarn_service(self.config, ' '.join(airbyte_cmd).replace(self.airbyte_mount_dir, runtime_tmp_dir), runtime_tmp_dir)
-        return ["python", os.path.dirname(os.path.abspath(__file__)) / 'yarn/watch.py', "-applicationId", app_id]
+        return ["python", Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/watch.py', "--app_id", app_id, "--yarn_config", orjson.dumps(self.config["yarn_service_config"]), Path(runtime_tmp_dir) / "stdout"]
 
 
     def to_command(
