@@ -101,12 +101,12 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     return app_id
 
 
-def _get_yarn_service_app_id(yarn_config: dict, service_uri: str) -> str:
+def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
     """
     Get the application id of the given service
     """
     session = _create_session(yarn_config)
-    url = f"{yarn_config.get('yarn_service_config').get('base_url')}/app/{service_uri}"
+    url = f"{yarn_config.get('base_url')}/app/{service_uri}"
     response = session.get(url)
     app_id = None
     logger.info('Waiting for the application id...')
