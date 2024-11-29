@@ -1,4 +1,3 @@
-import json
 import os
 from datetime import datetime
 from time import sleep
@@ -33,7 +32,7 @@ class YarnApplicationInfo(TypedDict):
 
 def _create_session(yarn_config: YarnConfig) -> Session:
     session = requests.Session()
-    session.auth = HTTPBasicAuth(yarn_config.get('username'), yarn_config.get('password'))
+    session.auth = HTTPBasicAuth(yarn_config['username'], yarn_config['password'])
     session.headers.update({"Content-Type": "application/json"} | yarn_config.get('extra_headers', {}))
     return session
 
