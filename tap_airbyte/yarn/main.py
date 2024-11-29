@@ -92,7 +92,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     session = _create_session(yarn_config)
     url = f"{yarn_config.get('base_url')}/app/v1/services"
     logger.info('Creating YARN service...')
-    logger.debug('Config: %')
+    logger.info('Config: %') # tests
     response = session.post(url, data=json.dumps(service_config))
     response.raise_for_status()
     service_uri = response.json().get('uri')
@@ -110,6 +110,7 @@ def _get_yarn_service_app_id(yarn_config: dict, service_uri: str) -> str:
     url = f"{yarn_config.get('yarn_service_config').get('base_url')}/app/{service_uri}"
     response = session.get(url)
     app_id = None
+    logger.info('Waiting for the application id...')
     while not app_id:
         app_id = response.json().get('id')
         if response.json().get('state', 'STOPPED') == 'STOPPED':
