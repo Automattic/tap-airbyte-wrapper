@@ -50,7 +50,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
       "components" :
         [
           {
-            "name": f"airbyte-component",
+            "name": "a",
             "number_of_containers": 1,
             "restart_policy": "NEVER",
             "artifact": {
