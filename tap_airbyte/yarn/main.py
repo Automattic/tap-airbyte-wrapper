@@ -46,6 +46,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     airbyte_mount_dir = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
     main_command = command.split()[0].lstrip("--")
     output_file = f'stdout-{command.split()[0].lstrip("--")}'
+    output_file_path = os.path.join(runtime_tmp_dir, output_file)
     service_config = {
       "name": f"airbyte-{airbyte_image.split('/')[-1]}-{main_command}-{datetime.now().strftime('%Y%m%d%H%M')}",
       "version": "1.0",
@@ -61,7 +62,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
             },
             # Redirect the stdout to a file so it can be read by Meltano
             # config and catalog files should be place on the mounted volume
-            "launch_command": f'"python main.py {command} > {os.path.join(runtime_tmp_dir, output_file)}"',
+            "launch_command": f'"python main.py {command} > {output_file_path}"',
             "resource": {
               "cpus": 2,
               "memory": "1024"
@@ -100,7 +101,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     logger.info('YARN service created with uri: %s', service_uri)
     app_id = _get_yarn_service_app_id(yarn_config, service_uri)
     logger.info('YARN service started with app_id: %s', app_id)
-    return app_id, os.path.join(airbyte_mount_dir, output_file)
+    return app_id, output_file
 
 
 def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
