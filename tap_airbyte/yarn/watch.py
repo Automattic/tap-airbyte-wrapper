@@ -27,12 +27,12 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     """
     if wait_for_file(file_path):
         with open(file_path, 'r') as file:
-            raise Exception(is_airbyte_app_running(yarn_config, app_id), bool(file.readline()))
             while is_airbyte_app_running(yarn_config, app_id):
                 line = file.readline()
                 if not line:  # If EOF, wait for more content
                     time.sleep(2)
                     continue
+                raise Exception(line)
                 print(line, end='')
             # Read remaining lines after the service is finished
             for line in file:
