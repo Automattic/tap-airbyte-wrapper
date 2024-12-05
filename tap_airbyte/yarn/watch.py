@@ -17,8 +17,7 @@ def wait_for_file(file_path, timeout=60, interval=1):
     start_time = time.time()
     while time.time() - start_time < timeout:
         if os.path.exists(file_path):
-            # File found
-            return True
+            return True # File found
         time.sleep(interval)
     return False  # Timeout reached
 
@@ -28,22 +27,25 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     """
     if wait_for_file(file_path):
         with open(file_path, 'r') as file:
-            # Move to the end of the file for streaming new content
-            file.seek(0, 2)
-            while True:  # Streaming loop
+            while is_airbyte_app_running(yarn_config, app_id):
                 line = file.readline()
-                if not line:  # If at EOF, wait for more content
-                    time.sleep(1)
-                    app_info = get_yarn_service_application_info(yarn_config, app_id)
-                    if is_yarn_app_terminated(app_info):
-                        if is_yarn_app_failed(app_info):
-                            raise Exception(f"Yarn application {app_id} failed.")
-                        exit(0)
+                if not line:  # If EOF, wait for more content
+                    time.sleep(2)
                     continue
-
+                print(line, end='')
+            # Read remaining lines after the service is finished
+            for line in file:
                 print(line, end='')
     else:
         raise Exception(f"File not found: {file_path}")
+
+def is_airbyte_app_running(yarn_config: dict, app_id: str) -> bool:
+    app_info = get_yarn_service_application_info(yarn_config, app_id)
+    if is_yarn_app_terminated(app_info):
+        if is_yarn_app_failed(app_info):
+            raise Exception(f"Yarn application {app_id} failed.")
+        return False # Yarn application finished successfully
+    return True
 
 
 def main():
