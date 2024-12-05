@@ -29,6 +29,7 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
         with open(file_path, 'r') as file:
             while is_airbyte_app_running(yarn_config, app_id):
                 line = file.readline()
+                raise Exception(line)
                 if not line:  # If EOF, wait for more content
                     time.sleep(2)
                     continue
@@ -41,7 +42,6 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
 
 def is_airbyte_app_running(yarn_config: dict, app_id: str) -> bool:
     app_info = get_yarn_service_application_info(yarn_config, app_id)
-    raise Exception(app_info)
     if is_yarn_app_terminated(app_info):
         if is_yarn_app_failed(app_info):
             raise Exception(f"Yarn application {app_id} failed.")
