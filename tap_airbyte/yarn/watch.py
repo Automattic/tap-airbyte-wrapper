@@ -28,11 +28,10 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     if wait_for_file(file_path):
         with open(file_path, 'r') as file:
             while is_airbyte_app_running(yarn_config, app_id):
-                where = file.tell()
+                print("Waiting for more content...")
                 line = file.readline()
                 if not line:  # If EOF, wait for more content
                     time.sleep(2)
-                    file.seek(where)
                     continue
                 raise Exception(line)
                 print(line, end='')
