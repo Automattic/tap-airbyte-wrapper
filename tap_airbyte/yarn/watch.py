@@ -2,6 +2,7 @@ import json
 import os
 import time
 import argparse
+from time import sleep
 
 from main import get_yarn_service_application_info, is_yarn_app_terminated, is_yarn_app_failed
 
@@ -27,13 +28,13 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     """
     if wait_for_file(file_path):
         with open(file_path, 'r') as file:
+            sleep(30)
+            raise Exception(file.readlines())
             while is_airbyte_app_running(yarn_config, app_id):
-                print("Waiting for more content...")
                 line = file.readline()
                 if not line:  # If EOF, wait for more content
                     time.sleep(2)
                     continue
-                raise Exception(line)
                 print(line, end='')
             # Read remaining lines after the service is finished
             for line in file:
