@@ -27,9 +27,9 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     """
     if wait_for_file(file_path):
         with open(file_path, 'r') as file:
+            raise Exception(file.readlines())
             while is_airbyte_app_running(yarn_config, app_id):
                 line = file.readline()
-                raise Exception(line)
                 if not line:  # If EOF, wait for more content
                     time.sleep(2)
                     continue
