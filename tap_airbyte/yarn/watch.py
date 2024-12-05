@@ -27,9 +27,9 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     Stream a file line by line until the callback function returns a value.
     """
     if wait_for_file(file_path):
+        sleep(30)
         with open(file_path, 'r') as file:
-            sleep(30)
-            raise Exception(file.readlines())
+            raise Exception(file_path, file.readlines())
             while is_airbyte_app_running(yarn_config, app_id):
                 line = file.readline()
                 if not line:  # If EOF, wait for more content
