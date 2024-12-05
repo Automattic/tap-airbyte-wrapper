@@ -36,7 +36,7 @@ def _create_session(yarn_config: YarnConfig) -> Session:
     session.headers.update({"Content-Type": "application/json"} | yarn_config.get('extra_headers', {}))
     return session
 
-def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: str) -> str:
+def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: str) -> tuple[str, str]:
     """
     Run a service on YARN with the given command and return the application id
     """
@@ -44,8 +44,10 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     airbyte_image = config['airbyte_spec'].get('image')
     airbyte_tag = config['airbyte_spec'].get('tag', 'latest')
     airbyte_mount_dir = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
+    main_command = command.split()[0].lstrip("--")
+    output_file = f'stdout-{command.split()[0].lstrip("--")}'
     service_config = {
-      "name": f"airbyte-{airbyte_image.split('/')[-1]}-{airbyte_tag}-{datetime.now().strftime('%Y%m%d%H%M')}",
+      "name": f"airbyte-{airbyte_image.split('/')[-1]}-{main_command}-{datetime.now().strftime('%Y%m%d%H%M')}",
       "version": "1.0",
       "components" :
         [
@@ -59,7 +61,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
             },
             # Redirect the stdout to a file so it can be read by Meltano
             # config and catalog files should be place on the mounted volume
-            "launch_command": f'"python main.py {command} > {runtime_tmp_dir}/stdout"',
+            "launch_command": f'"python main.py {command} > {os.path.join(runtime_tmp_dir, output_file)}"',
             "resource": {
               "cpus": 2,
               "memory": "1024"
@@ -98,7 +100,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     logger.info('YARN service created with uri: %s', service_uri)
     app_id = _get_yarn_service_app_id(yarn_config, service_uri)
     logger.info('YARN service started with app_id: %s', app_id)
-    return app_id
+    return app_id, os.path.join(airbyte_mount_dir, output_file)
 
 
 def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
