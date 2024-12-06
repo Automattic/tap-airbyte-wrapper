@@ -17,7 +17,9 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
 
 
 def read_file(file_path, position):
-    print("Reading file...")
+    """
+    Read a file from a given position and print the content.
+    """
     with open(file_path, 'r') as file:
         while True:
             file.seek(position)

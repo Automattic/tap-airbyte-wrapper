@@ -471,11 +471,9 @@ class TapAirbyte(Tap):
         Run the Airbyte connector on YARN and return the command to watch the output file.
         """
         app_id, output_file = run_yarn_service(self.config, ' '.join(airbyte_cmd).replace(self.airbyte_mount_dir, runtime_tmp_dir), runtime_tmp_dir)
-        logger.info("Waiting for the output file %s to be created.", output_file)
+        logger.debug("Waiting for the output file %s to be created.", output_file)
         wait_for_file(os.path.join(runtime_tmp_dir, output_file))
-        logger.info("File %s created. Streaming file and Waiting for the YARN application to finish.", output_file)
-        while is_airbyte_app_running(self.config["yarn_service_config"], app_id):
-            time.sleep(1)
+        logger.debug("File %s created. Streaming file and Waiting for the YARN application to finish.", output_file)
         return ["python3", Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/watch.py', "--app_id",
                 app_id, "--yarn_config", orjson.dumps(self.config["yarn_service_config"]),
                 os.path.join(runtime_tmp_dir, output_file)]
