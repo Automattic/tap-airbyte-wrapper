@@ -47,8 +47,9 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     main_command = command.split()[0].lstrip("--")
     output_file = f'stdout-{command.split()[0].lstrip("--")}'
     output_file_path = os.path.join(runtime_tmp_dir, output_file)
+    service_name = f"airbyte-{airbyte_image.split('/')[-1]}-{main_command}-{datetime.now().strftime('%Y%m%d%H%M')}"
     service_config = {
-      "name": f"airbyte-{airbyte_image.split('/')[-1]}-{main_command}-{datetime.now().strftime('%Y%m%d%H%M')}",
+      "name": service_name,
       "version": "1.0",
       "components" :
         [
@@ -93,14 +94,14 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     }
     session = _create_session(yarn_config)
     url = f"{yarn_config['base_url']}/app/v1/services"
-    logger.info('Creating YARN service...')
-    logger.info('Config: %s', service_config) # tests
+    logger.debug('Creating YARN service %s...', service_name)
+    logger.debug('Config: %s', service_config) # tests
     response = session.post(url, json=service_config)
     response.raise_for_status()
     service_uri = response.json().get('uri')
-    logger.info('YARN service created with uri: %s', service_uri)
+    logger.debug('YARN service created with uri: %s', service_uri)
     app_id = _get_yarn_service_app_id(yarn_config, service_uri)
-    logger.info('YARN service started with app_id: %s', app_id)
+    logger.debug('YARN service started with app_id: %s', app_id)
     return app_id, output_file
 
 
