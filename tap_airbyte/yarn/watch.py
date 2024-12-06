@@ -2,7 +2,7 @@ import json
 import argparse
 from time import sleep
 
-from main import get_yarn_service_application_info, is_yarn_app_terminated, is_yarn_app_failed
+from main import is_airbyte_app_running
 
 def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     """
@@ -14,14 +14,6 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
         read_file(file_path, position)
         sleep(1) # If EOF is reached, wait briefly and then reopen
     read_file(file_path, position) # Read the remaining lines
-
-def is_airbyte_app_running(yarn_config: dict, app_id: str) -> bool:
-    app_info = get_yarn_service_application_info(yarn_config, app_id)
-    if is_yarn_app_terminated(app_info):
-        if is_yarn_app_failed(app_info):
-            raise Exception(f"Yarn application {app_id} failed.")
-        return False # Yarn application finished successfully
-    return True
 
 
 def read_file(file_path, position):

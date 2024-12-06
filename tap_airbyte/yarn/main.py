@@ -141,6 +141,16 @@ def get_yarn_service_application_info(yarn_config: YarnConfig, app_id: str) -> Y
     return response.json()
 
 
+def is_airbyte_app_running(yarn_config: dict, app_id: str) -> bool:
+    app_info = get_yarn_service_application_info(yarn_config, app_id)
+    logger.info(app_info)
+    if is_yarn_app_terminated(app_info):
+        if is_yarn_app_failed(app_info):
+            raise Exception(f"Yarn application {app_id} failed.")
+        return False # Yarn application finished successfully
+    return True
+
+
 class TimeoutException(Exception):
     pass
 

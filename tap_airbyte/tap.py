@@ -41,7 +41,7 @@ from singer_sdk import typing as th
 from singer_sdk.cli import common_options
 from singer_sdk.helpers._classproperty import classproperty
 
-from tap_airbyte.yarn.main import run_yarn_service, wait_for_file, logger
+from tap_airbyte.yarn.main import run_yarn_service, wait_for_file, logger, is_airbyte_app_running
 
 # Sentinel value for broken pipe
 PIPE_CLOSED = object()
@@ -474,6 +474,8 @@ class TapAirbyte(Tap):
         logger.info("Waiting for the output file %s to be created.", output_file)
         wait_for_file(os.path.join(runtime_tmp_dir, output_file))
         logger.info("File %s created. Streaming file and Waiting for the YARN application to finish.", output_file)
+        while is_airbyte_app_running(self.config["yarn_service_config"], app_id):
+            time.sleep(1)
         return ["python3", Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/watch.py', "--app_id",
                 app_id, "--yarn_config", orjson.dumps(self.config["yarn_service_config"]),
                 os.path.join(runtime_tmp_dir, output_file)]
