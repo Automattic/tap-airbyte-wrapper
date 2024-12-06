@@ -1,6 +1,6 @@
 import os
-from datetime import datetime, time
-from time import sleep
+from datetime import datetime
+from time import sleep, time
 from typing import TypedDict, Mapping, Any
 import logging
 
@@ -154,9 +154,9 @@ def wait_for_file(file_path, timeout=60, interval=1):
     :param interval: Time between checks, in seconds.
     :return: True if the file is created, False if the timeout is reached.
     """
-    start_time = time.time()
-    while time.time() - start_time < timeout:
+    start_time = time()
+    while time() - start_time < timeout:
         if os.path.exists(file_path):
             return # File created
-        time.sleep(interval)
+        sleep(interval)
     raise TimeoutException(f"File not created after {timeout}: {file_path}")
