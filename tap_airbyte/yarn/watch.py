@@ -25,6 +25,7 @@ def is_airbyte_app_running(yarn_config: dict, app_id: str) -> bool:
 
 
 def read_file(file_path, position):
+    print("Reading file...")
     with open(file_path, 'r') as file:
         while True:
             file.seek(position)
