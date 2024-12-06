@@ -11,12 +11,12 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     # Start from the beginning of the file
     position = 0
     while is_airbyte_app_running(yarn_config, app_id):
-        read_file(file_path, position)
+        position = read_file(file_path, position)
         sleep(1) # If EOF is reached, wait briefly and then reopen
     read_file(file_path, position) # Read the remaining lines
 
 
-def read_file(file_path, position):
+def read_file(file_path, position) -> int:
     """
     Read a file from a given position and print the content.
     """
@@ -25,7 +25,7 @@ def read_file(file_path, position):
             file.seek(position)
             line = file.readline()
             if not line:
-                return
+                return position
             print(line, end='')
             position = file.tell()  # Store current position
 
