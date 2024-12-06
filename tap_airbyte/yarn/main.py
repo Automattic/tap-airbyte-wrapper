@@ -113,7 +113,7 @@ def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
     url = f"{yarn_config.get('base_url')}/app/{service_uri}"
     response = session.get(url)
     app_id = None
-    logger.info('Waiting for the application id...')
+    logger.debug('Waiting for the application id...')
     while not app_id:
         app_id = response.json().get('id')
         if response.json().get('state', 'STOPPED') == 'STOPPED':
