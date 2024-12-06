@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, time
 from time import sleep
 from typing import TypedDict, Mapping, Any
 import logging
@@ -139,3 +139,24 @@ def get_yarn_service_application_info(yarn_config: YarnConfig, app_id: str) -> Y
     response = session.get(url)
     response.raise_for_status()
     return response.json()
+
+
+class TimeoutException(Exception):
+    pass
+
+
+def wait_for_file(file_path, timeout=60, interval=1):
+    """
+    Waits for a file to be created within a specified timeout.
+
+    :param file_path: Path to the file to wait for.
+    :param timeout: Maximum time to wait for the file, in seconds.
+    :param interval: Time between checks, in seconds.
+    :return: True if the file is created, False if the timeout is reached.
+    """
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if os.path.exists(file_path):
+            return # File created
+        time.sleep(interval)
+    raise TimeoutException(f"File not created after {timeout}: {file_path}")
