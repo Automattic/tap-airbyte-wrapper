@@ -138,13 +138,14 @@ def get_yarn_service_application_info(yarn_config: YarnConfig, app_id: str) -> Y
     url = f"{yarn_config.get('base_url')}/ws/v1/cluster/apps/{app_id}"
     response = session.get(url)
     response.raise_for_status()
-    return response.json()
+    return response.json().get('app', {})
 
 
 def is_airbyte_app_running(yarn_config: dict, app_id: str) -> bool:
     app_info = get_yarn_service_application_info(yarn_config, app_id)
     logger.info(app_info)
     if is_yarn_app_terminated(app_info):
+        logger.info("TERMINATED")
         if is_yarn_app_failed(app_info):
             raise Exception(f"Yarn application {app_id} failed.")
         return False # Yarn application finished successfully
