@@ -72,7 +72,6 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
                 "env": {
                     "YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true",
                     "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS": f"{airbyte_mount_dir}:{airbyte_mount_dir}:rw",
-                    "YARN_CONTAINER_RUNTIME_DOCKER_CONTAINER_HOSTNAME": f"{service_name[:50]}.airbyte",
                 },
                 "properties": {
                     "yarn.service.default-readiness-check.enabled": "false",
@@ -89,6 +88,9 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
                 "yarn.service.am-restart.max-attempts": 1,
                 # No need to track the service events
                 "yarn.dispatcher.drain-events.timeout": 0
+            },
+            "env": {
+                "YARN_CONTAINER_RUNTIME_DOCKER_CONTAINER_HOSTNAME": f"{service_name[:50]}.airbyte",
             }
         },
         "queue": yarn_config.get('queue', 'default')
