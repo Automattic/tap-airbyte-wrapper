@@ -54,7 +54,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
       "components" :
         [
           {
-            "name": "a",
+            "name": "airbyte_component",
             "number_of_containers": 1,
             "restart_policy": "NEVER",
             "artifact": {
@@ -71,7 +71,8 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
             "configuration": {
                 "env": {
                     "YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true",
-                    "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS": f"{airbyte_mount_dir}:{airbyte_mount_dir}:rw"
+                    "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS": f"{airbyte_mount_dir}:{airbyte_mount_dir}:rw",
+                    "YARN_CONTAINER_RUNTIME_DOCKER_CONTAINER_HOSTNAME": f"{service_name[:50]}.airbyte",
                 },
                 "properties": {
                     "yarn.service.default-readiness-check.enabled": "false",
