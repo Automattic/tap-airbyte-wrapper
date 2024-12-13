@@ -98,6 +98,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     logger.debug('Creating YARN service %s...', service_name)
     logger.debug('Config: %s', service_config) # tests
     response = session.post(url, json=service_config)
+    logger.info(response.json())
     response.raise_for_status()
     service_uri = response.json().get('uri')
     logger.debug('YARN service created with uri: %s', service_uri)
