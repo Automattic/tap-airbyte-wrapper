@@ -47,14 +47,14 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     main_command = command.split()[0].lstrip("--")
     output_file = f'stdout-{command.split()[0].lstrip("--")}'
     output_file_path = os.path.join(runtime_tmp_dir, output_file)
-    service_name = f"airbyte-{airbyte_image.split('/')[-1]}-{main_command}-{datetime.now().strftime('%Y%m%d%H%M')}"
+    service_name = f"{airbyte_image.split('/')[-1]}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     service_config = {
       "name": service_name,
       "version": "1.0",
       "components" :
         [
           {
-            "name": "airbyte-component",
+            "name": main_command,
             "number_of_containers": 1,
             "restart_policy": "NEVER",
             "artifact": {
@@ -88,9 +88,6 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
                 "yarn.service.am-restart.max-attempts": 1,
                 # No need to track the service events
                 "yarn.dispatcher.drain-events.timeout": 0
-            },
-            "env": {
-                "YARN_CONTAINER_RUNTIME_DOCKER_CONTAINER_HOSTNAME": f"{service_name[:50]}.airbyte",
             }
         },
         "queue": yarn_config.get('queue', 'default')
