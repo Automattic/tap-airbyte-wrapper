@@ -642,7 +642,7 @@ class TapAirbyte(Tap):
                         state_dict = self.airbyte_state['airbyte_state']
 
                     self.logger.debug("Using state: %s", state_dict)
-                    state.write(orjson.dumps(state_dict))
+                    state.write(orjson.dumps(state_dict, default=default))
 
             runtime_conf_dir = host_tmpdir if self.is_native() else self.airbyte_mount_dir
             proc = subprocess.Popen(
