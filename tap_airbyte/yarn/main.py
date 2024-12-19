@@ -112,12 +112,16 @@ def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
     """
     session = _create_session(yarn_config)
     url = f"{yarn_config.get('base_url')}/app/{service_uri}"
-    response = session.get(url)
     app_id = None
+    state = None
     logger.debug('Waiting for the application id...')
-    while not app_id:
-        app_id = response.json().get('id')
-        if response.json().get('state', 'STOPPED') == 'STOPPED':
+    while (not app_id and state != 'RUNNING') or state in YARN_APP_TERMINAL_STATES:
+        logger.info(f'APP_ID: {app_id}, STATE: {state}')
+        response = session.get(url)
+        app_info = response.json()
+        app_id = app_info.get('id')
+        state = app_info.get('state', 'STOPPED')
+        if state == 'STOPPED':
             raise Exception(f"Yarn Service stopped before start the application: {response.json()}")
         sleep(1) # control the requests
     return app_id
