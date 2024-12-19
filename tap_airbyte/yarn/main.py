@@ -102,13 +102,13 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     service_uri = response.json().get('uri')
     logger.debug('YARN service created with uri: %s', service_uri)
     app_id = _get_yarn_service_app_id(yarn_config, service_uri)
-    logger.debug('YARN service started with app_id: %s', app_id)
+    logger.debug('YARN service running with app_id: %s', app_id)
     return app_id, output_file
 
 
 def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
     """
-    Get the application id of the given service
+    Get the application id of a running service
     """
     session = _create_session(yarn_config)
     url = f"{yarn_config.get('base_url')}/app/{service_uri}"
