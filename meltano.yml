@@ -15,15 +15,40 @@ plugins:
         - state
         - about
         - stream-maps
+      settings:
+        - name: airbyte_spec
+          kind: object
+          description: >
+            Specification for the Airbyte source connector. This is a JSON object minimally
+            containing the `image` key. The `tag` key is optional and defaults to `latest`.
+        - name: airbyte_config
+          kind: object
+          description: >
+            Configuration to pass through to the Airbyte source connector. This is a JSON object.
+            It can be gleaned by running the tap with the `--about` flag and the `--config` flag
+            pointing to a file containing the `airbyte_spec` configuration.
+        - name: docker_mounts
+          kind: array
+          description: >
+            Docker mounts to make available to the Airbyte container. Expects a list of maps
+            containing source, target, and type as documented in the Docker `--mount` documentation.
+        - name: skip_native_check
+          kind: boolean
+          description: >
+            Disables the check for natively executable sources. By default, AirByte sources are checked
+            to see if they are able to be executed natively without using containers. This disables that
+            check and forces them to run in containers.
+        - name: native_source_python
+          kind: string
+          description: "Path to Python executable to use"
+        - name: yarn_service_config
+          kind: object
+          description: >
+            Set up a YARN service config for running the Airbyte container. Use only if you want
+            to run the Airbyte container as a YARN service.
     - name: tap-pokeapi
       namespace: tap_pokeapi
       inherit_from: tap-airbyte
-      config:
-        airbyte_spec:
-          image: "airbyte/source-pokeapi"
-          tag: "0.1.5"
-        airbyte_config:
-          pokemon_name: smeargle
   loaders:
     - name: target-jsonl
       variant: andyh1203
