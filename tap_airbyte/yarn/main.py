@@ -124,6 +124,7 @@ def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
         if state == 'STOPPED':
             raise Exception(f"Yarn Service stopped before start the application: {response.json()}")
         sleep(1) # control the requests
+    logger.info(f'APP_ID: {app_id}, STATE: {state}')
     return app_id
 
 
