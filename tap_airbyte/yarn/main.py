@@ -116,7 +116,7 @@ def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
     state = None
     logger.debug('Waiting for the application id...')
     while (not app_id and state != 'RUNNING') or state in YARN_APP_TERMINAL_STATES:
-        logger.info(f'APP_ID: {app_id}, STATE: {state}')
+        logger.debug(f'APP_ID: {app_id}, STATE: {state}')
         response = session.get(url)
         app_info = response.json()
         app_id = app_info.get('id')
