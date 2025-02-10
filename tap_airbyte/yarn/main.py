@@ -30,13 +30,19 @@ class YarnApplicationInfo(TypedDict):
     finalStatus: str
 
 
+class YarnServiceInfo(TypedDict):
+    app_id: str
+    output_file: str
+    service_name: str
+
+
 def _create_session(yarn_config: YarnConfig) -> Session:
     session = requests.Session()
     session.auth = HTTPBasicAuth(yarn_config['username'], yarn_config['password'])
     session.headers.update({"Content-Type": "application/json"} | yarn_config.get('extra_headers', {}))
     return session
 
-def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: str) -> tuple[str, str]:
+def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: str) -> YarnServiceInfo:
     """
     Run a service on YARN with the given command and return the application id
     """
@@ -103,7 +109,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     logger.debug('YARN service created with uri: %s', service_uri)
     app_id = _get_yarn_service_app_id(yarn_config, service_uri)
     logger.debug('YARN service running with app_id: %s', app_id)
-    return app_id, output_file
+    return {'app_id': app_id, 'output_file': output_file, 'service_name': service_name}
 
 
 def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
@@ -125,6 +131,16 @@ def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
             raise Exception(f"Yarn Service stopped/failed before start the application: {response.json()}")
         sleep(1) # control the requests
     return app_id
+
+
+def delete_yarn_service(yarn_config: YarnConfig, service_name: str) -> None:
+    session = _create_session(yarn_config)
+    url = f"{yarn_config.get('base_url')}/app/v1/services/{service_name}"
+    response = session.delete(url)
+    if response.status_code != 204:
+        logger.warning(f"Failed to delete Yarn service: {response.json()}")
+    else:
+        logger.info(f"Yarn service deleted: {service_name}")
 
 
 def is_yarn_app_terminated(yarn_app: YarnApplicationInfo) -> bool:

@@ -470,13 +470,15 @@ class TapAirbyte(Tap):
         """
         Run the Airbyte connector on YARN and return the command to watch the output file.
         """
-        app_id, output_file = run_yarn_service(self.config, ' '.join(airbyte_cmd).replace(self.airbyte_mount_dir, runtime_tmp_dir), runtime_tmp_dir)
-        self.logger.debug("Waiting for the output file %s to be created.", output_file)
-        wait_for_file(os.path.join(runtime_tmp_dir, output_file))
-        self.logger.debug("File %s created. Streaming file and Waiting for the YARN application to finish.", output_file)
+        yarn_service_info = run_yarn_service(
+            self.config, ' '.join(airbyte_cmd).replace(self.airbyte_mount_dir, runtime_tmp_dir), runtime_tmp_dir)
+        self.logger.debug("Waiting for the output file %s to be created.", yarn_service_info['output_file'])
+        wait_for_file(os.path.join(runtime_tmp_dir, yarn_service_info['output_file']))
+        self.logger.debug("File %s created. Streaming file and Waiting for the YARN application to finish.", yarn_service_info['output_file'])
         return [sys.executable, Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/stream_output.py', "--app_id",
-                app_id, "--yarn_config", orjson.dumps(self.config["yarn_service_config"]),
-                os.path.join(runtime_tmp_dir, output_file)]
+                yarn_service_info['app_id'], "--yarn_config", orjson.dumps(self.config["yarn_service_config"]),
+                "--service_name", self.config["service_name"],
+                os.path.join(runtime_tmp_dir, yarn_service_info['output_file'])]
 
 
     def to_command(
