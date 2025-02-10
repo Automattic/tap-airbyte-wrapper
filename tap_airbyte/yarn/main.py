@@ -134,13 +134,12 @@ def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
 
 
 def delete_yarn_service(yarn_config: YarnConfig, service_name: str) -> None:
+    """
+    Delete a YARN service (this will force remove libraries and files created by the service)
+    """
     session = _create_session(yarn_config)
     url = f"{yarn_config.get('base_url')}/app/v1/services/{service_name}"
-    response = session.delete(url)
-    if response.status_code != 204:
-        logger.warning(f"Failed to delete Yarn service: {response.json()}")
-    else:
-        logger.info(f"Yarn service deleted: {service_name}")
+    session.delete(url)
 
 
 def is_yarn_app_terminated(yarn_app: YarnApplicationInfo) -> bool:

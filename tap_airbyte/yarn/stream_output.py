@@ -19,6 +19,7 @@ def main():
         yarn_config=json.loads(args.yarn_config),
         app_id=args.app_id
     )
+    # After finish streaming the file, delete the service to remove the files created by the service
     delete_yarn_service(json.loads(args.yarn_config), args.service_name)
 
 
