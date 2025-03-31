@@ -162,7 +162,7 @@ class TimeoutException(Exception):
     pass
 
 
-def wait_for_file(file_path, timeout=60, interval=1):
+def wait_for_file(file_path, timeout=120, interval=1):
     """
     Waits for a file to be created within a specified timeout.
 
