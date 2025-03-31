@@ -63,7 +63,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
             },
             # Redirect the stdout to a file so it can be read by Meltano
             # config and catalog files should be place on the mounted volume
-            "launch_command": f'"python main.py {command} > {output_file_path}"',
+            "launch_command": f'"python main.py {command} | tee {output_file_path}"',
             "resource": {
               "cpus": 2,
               "memory": "1024"
