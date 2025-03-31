@@ -474,7 +474,7 @@ class TapAirbyte(Tap):
         self.logger.debug("Waiting for the output file %s to be created.", output_file)
         wait_for_file(os.path.join(runtime_tmp_dir, output_file))
         self.logger.debug("File %s created. Streaming file and Waiting for the YARN application to finish.", output_file)
-        self.logger.debug(f"List files {self.airbyte_mount_dir}", os.listdir(self.airbyte_mount_dir))
+        self.logger.debug(f"List files {runtime_tmp_dir}", os.listdir(runtime_tmp_dir))
         return [sys.executable, Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/stream_output.py', "--app_id",
                 app_id, "--yarn_config", orjson.dumps(self.config["yarn_service_config"]),
                 os.path.join(runtime_tmp_dir, output_file)]
