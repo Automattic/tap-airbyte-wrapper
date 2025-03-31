@@ -173,8 +173,8 @@ def wait_for_file(file_path, timeout=60, interval=1):
     """
     start_time = time()
     while time() - start_time < timeout:
-        if os.path.exists(file_path):
-            return # File created
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            return # File created and not empty
         sleep(interval)
     raise TimeoutException(f"File not created after {timeout}: {file_path}")
 
