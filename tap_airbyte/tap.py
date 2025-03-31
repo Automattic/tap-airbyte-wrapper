@@ -475,7 +475,7 @@ class TapAirbyte(Tap):
         wait_for_file(os.path.join(runtime_tmp_dir, output_file))
         self.logger.debug("File %s created. Streaming file and Waiting for the YARN application to finish.", output_file)
         # self.logger.debug(f"List files {runtime_tmp_dir}: %s", os.listdir(runtime_tmp_dir))
-        time.sleep(5)
+        time.sleep(10)
         with open(os.path.join(runtime_tmp_dir, output_file), "r") as file:
             lines = file.readlines()
             self.logger.debug("Output file contents: %s", lines)
