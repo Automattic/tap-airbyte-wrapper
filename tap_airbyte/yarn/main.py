@@ -178,7 +178,6 @@ def wait_for_file(file_path, timeout=120, interval=1):
                 if len(file.readline()) > 0:  # Check if the file is not empty
                     logger.info(f"File created and not empty: {file_path}")
                     return True
-            return # File created and not empty
         sleep(interval)
     raise TimeoutException(f"File not created or empty after {timeout}: {file_path}")
 
