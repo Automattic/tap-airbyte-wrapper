@@ -173,10 +173,14 @@ def wait_for_file(file_path, timeout=120, interval=1):
     """
     start_time = time()
     while time() - start_time < timeout:
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+        if os.path.exists(file_path):
+            with open(file_path, 'r') as file:
+                if len(file.readline()) > 0:  # Check if the file is not empty
+                    logger.info(f"File created and not empty: {file_path}")
+                    return True
             return # File created and not empty
         sleep(interval)
-    raise TimeoutException(f"File not created after {timeout}: {file_path}")
+    raise TimeoutException(f"File not created or empty after {timeout}: {file_path}")
 
 
 def read_file(file_path, position) -> int:
