@@ -47,7 +47,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     main_command = command.split()[0].lstrip("--")
     output_file = f'stdout-{command.split()[0].lstrip("--")}'
     output_file_path = os.path.join(runtime_tmp_dir, output_file)
-    service_name = f"{airbyte_image.split('/')[-1]}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{runtime_tmp_dir.split('-')[-1]}"
+    service_name = f"{airbyte_image.split('/')[-1]}-{datetime.now().strftime('%Y%m%d')}-{runtime_tmp_dir.split('-')[-1]}"
     service_config = {
       "name": service_name,
       "version": "1.0",
