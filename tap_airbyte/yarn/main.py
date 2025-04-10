@@ -3,6 +3,7 @@ from datetime import datetime
 from time import sleep, time
 from typing import TypedDict, Mapping, Any
 import logging
+import hashlib
 
 from requests import Session
 from tenacity import retry, stop_after_delay, wait_fixed
@@ -47,7 +48,8 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     main_command = command.split()[0].lstrip("--")
     output_file = f'stdout-{command.split()[0].lstrip("--")}'
     output_file_path = os.path.join(runtime_tmp_dir, output_file)
-    service_name = f"{airbyte_image.split('/')[-1]}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    service_hash = hashlib.sha256(f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{runtime_tmp_dir.split('/')[-1].split('-')[-1]}".encode()).hexdigest()
+    service_name = f"{airbyte_image.split('/')[-1]}-{service_hash[:10]}"
     service_config = {
       "name": service_name,
       "version": "1.0",
