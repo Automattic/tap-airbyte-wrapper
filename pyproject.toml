@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tap-airbyte"
-version = "0.9.4"
+version = "0.9.3"
 description = "Singer tap for Airbyte, built with the Meltano Singer SDK."
 readme = "README.md"
 authors = ["Alex Butler"]
