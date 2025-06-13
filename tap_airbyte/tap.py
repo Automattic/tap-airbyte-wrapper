@@ -216,6 +216,15 @@ class TapAirbyte(Tap):
                     default="default",
                     description="YARN queue to submit the service to (default: default)",
                 ),
+                th.Property(
+                    "timeout",
+                    th.IntegerType,
+                    default=600,
+                    description="Timeout in seconds for the airbyte output file to be created and populated. "
+                                "FUSE can take a while to populate the file if the writes are frequent, so this is"
+                                " set to 600 seconds by default. You can adjust this value based on your needs."
+                                "If the file is not created within this time, the process will raise an exception.",
+                ),
             ),
             required=False,
             description="Set up a YARN service config for running the Airbyte container. Use only if you want to run "
@@ -472,7 +481,8 @@ class TapAirbyte(Tap):
         """
         app_id, output_file = run_yarn_service(self.config, ' '.join(airbyte_cmd).replace(self.airbyte_mount_dir, runtime_tmp_dir), runtime_tmp_dir)
         self.logger.debug("Waiting for the output file %s to be created.", output_file)
-        wait_for_file(os.path.join(runtime_tmp_dir, output_file))
+        wait_for_file(os.path.join(runtime_tmp_dir, output_file),
+                      timeout=int(self.config["yarn_service_config"].get("timeout", 600)))
         self.logger.debug("File %s created. Streaming file and Waiting for the YARN application to finish.", output_file)
         return [sys.executable, Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/stream_output.py', "--app_id",
                 app_id, "--yarn_config", orjson.dumps(self.config["yarn_service_config"]),
