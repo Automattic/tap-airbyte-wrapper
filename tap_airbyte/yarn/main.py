@@ -175,8 +175,8 @@ def wait_for_file(file_path, timeout=300, interval=1):
     """
     start_time = time()
     while time() - start_time < timeout:
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-            return # File created and not empty
+        if os.path.exists(file_path):
+            return # File created
         sleep(interval)
     raise TimeoutException(f"File not created after {timeout}: {file_path}")
 
@@ -203,5 +203,5 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     while is_airbyte_app_running(yarn_config, app_id):
         position = read_file(file_path, position)
         sleep(1) # If EOF is reached, wait briefly and then reopen
-    sleep(5) # Wait for the file to be completely written and synced
+    sleep(10) # Wait for the file to be completely written and synced
     read_file(file_path, position) # Read the remaining lines
