@@ -191,8 +191,13 @@ def read_file(file_path, position) -> int:
             line = file.readline()
             if not line:
                 return position
-            print(line, end='', flush=True)
-            position = file.tell()  # Store current position
+            # Only print if line ends with newline (full line written)
+            if line.endswith('\n'):
+                print(line, end='', flush=True)
+                position = file.tell()
+            else:
+                # Incomplete line — wait until it's finished
+                return position
 
 
 def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
