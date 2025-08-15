@@ -191,7 +191,7 @@ def read_file(file_path, position) -> int:
             line = file.readline()
             if not line:
                 return position
-            print(line, end='')
+            print(line, end='', flush=True)
             position = file.tell()  # Store current position
 
 
