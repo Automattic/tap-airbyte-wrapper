@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tap-airbyte"
-version = "0.9.8"
+version = "0.10.0"
 description = "Singer tap for Airbyte, built with the Meltano Singer SDK."
 readme = "README.md"
 authors = ["Alex Butler"]
@@ -11,14 +11,14 @@ keywords = [
 classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12"
 ]
 license = "Apache-2.0"
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.13"
-singer-sdk = { version="~=0.44.1", extras = [] }
+python = ">=3.11,<3.13"
+singer-sdk = { version="~=0.53.5", extras = [] }
 fs-s3fs = { version = "~=1.1.1", optional = true }
 orjson = "^3.10.6"
 virtualenv = "^20.26.3"
@@ -26,18 +26,18 @@ tenacity = "^8.5.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8"
-singer-sdk = { version="~=0.44.1", extras = ["testing"] }
+singer-sdk = { version="~=0.53.5", extras = ["testing"] }
 
 [tool.poetry.extras]
 s3 = ["fs-s3fs"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_unused_configs = true
 
 [tool.ruff]
 src = ["tap_airbyte"]
-target-version = "py39"
+target-version = "py312"
 
 [tool.ruff.lint]
 ignore = [
