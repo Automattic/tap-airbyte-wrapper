@@ -38,7 +38,6 @@ import singer_sdk.singerlib as singer
 import virtualenv
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
-from singer_sdk.helpers._classproperty import classproperty
 
 from tap_airbyte.yarn.main import run_yarn_service, wait_for_file
 
