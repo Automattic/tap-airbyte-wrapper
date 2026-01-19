@@ -38,6 +38,7 @@ import virtualenv
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
 from singer_sdk.helpers._classproperty import classproperty
+from singer_sdk.singerlib import StateMessage
 from typing_extensions import override
 
 from tap_airbyte.yarn.main import run_yarn_service, wait_for_file
@@ -930,7 +931,7 @@ class TapAirbyte(Tap):
             # Write final state if EOF was received from Airbyte
             if self.eof_received:
                 with STDOUT_LOCK:
-                    self.write_message(singer.StateMessage(self.airbyte_state))
+                    self.write_message(StateMessage(self.airbyte_state))
         t2 = time.perf_counter()
         for stream in self.streams.values():
             stream.log_sync_costs()
@@ -1034,7 +1035,7 @@ class AirbyteStream(Stream):
                 self.buffer.task_done()
 
     @override
-    def write_message(message) -> None:
+    def write_message(self, message) -> None:
         try:
             sys.stdout.buffer.write(
                 orjson.dumps(message.to_dict(), option=TapAirbyte.ORJSON_OPTS, default=default)
