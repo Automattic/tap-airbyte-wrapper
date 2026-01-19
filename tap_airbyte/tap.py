@@ -34,12 +34,12 @@ from uuid import UUID
 import click
 import orjson
 import requests
+import singer_sdk.singerlib as singer
 import virtualenv
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
+from singer_sdk.cli import common_options
 from singer_sdk.helpers._classproperty import classproperty
-from singer_sdk.singerlib import StateMessage
-from typing_extensions import override
 
 from tap_airbyte.yarn.main import run_yarn_service, wait_for_file
 
@@ -61,7 +61,25 @@ def default(obj):
     return str(obj)
 
 
+def write_message(message) -> None:
+    try:
+        sys.stdout.buffer.write(
+            orjson.dumps(message.to_dict(), option=TapAirbyte.ORJSON_OPTS, default=default)
+        )
+        sys.stdout.buffer.flush()
+    except IOError as e:
+        # Broken pipe
+        if e.errno == errno.EPIPE and TapAirbyte.pipe_status is not PIPE_CLOSED:
+            TapAirbyte.logger.info("Received SIGPIPE, stopping sync of stream.")  # type: ignore
+            TapAirbyte.pipe_status = PIPE_CLOSED  # type: ignore
+            # Prevent BrokenPipe writes to closed stdout
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        else:
+            raise
+
+
 STDOUT_LOCK = Lock()
+singer.write_message = write_message
 
 
 class AirbyteException(Exception):
@@ -919,7 +937,7 @@ class TapAirbyte(Tap):
                     self.airbyte_state['airbyte_state'] = existing_airbyte_state_v2
 
                     with STDOUT_LOCK:
-                        self.write_message(StateMessage(self.airbyte_state))
+                        singer.write_message(singer.StateMessage(self.airbyte_state))
                 else:
                     self.logger.warning("Unhandled message: %s", airbyte_message)
         # Daemon threads will be terminated when the main thread exits,
@@ -931,7 +949,7 @@ class TapAirbyte(Tap):
             # Write final state if EOF was received from Airbyte
             if self.eof_received:
                 with STDOUT_LOCK:
-                    self.write_message(StateMessage(self.airbyte_state))
+                    singer.write_message(singer.StateMessage(self.airbyte_state))
         t2 = time.perf_counter()
         for stream in self.streams.values():
             stream.log_sync_costs()
@@ -992,7 +1010,7 @@ class AirbyteStream(Stream):
     def _write_record_message(self, record: dict) -> None:
         for record_message in self._generate_record_messages(record):
             with STDOUT_LOCK:
-                self.write_message(record_message)
+                singer.write_message(record_message)
 
     def _write_state_message(self) -> None:
         pass
@@ -1033,23 +1051,6 @@ class AirbyteStream(Stream):
                 except Empty:
                     break
                 self.buffer.task_done()
-
-    @override
-    def write_message(self, message) -> None:
-        try:
-            sys.stdout.buffer.write(
-                orjson.dumps(message.to_dict(), option=TapAirbyte.ORJSON_OPTS, default=default)
-            )
-            sys.stdout.buffer.flush()
-        except IOError as e:
-            # Broken pipe
-            if e.errno == errno.EPIPE and TapAirbyte.pipe_status is not PIPE_CLOSED:
-                TapAirbyte.logger.info("Received SIGPIPE, stopping sync of stream.")  # type: ignore
-                TapAirbyte.pipe_status = PIPE_CLOSED  # type: ignore
-                # Prevent BrokenPipe writes to closed stdout
-                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-            else:
-                raise
 
 
 if __name__ == "__main__":
