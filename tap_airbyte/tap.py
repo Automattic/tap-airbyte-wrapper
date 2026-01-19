@@ -919,7 +919,7 @@ class TapAirbyte(Tap):
                     self.airbyte_state['airbyte_state'] = existing_airbyte_state_v2
 
                     with STDOUT_LOCK:
-                        self.write_message(singer.StateMessage(self.airbyte_state))
+                        self.write_message(StateMessage(self.airbyte_state))
                 else:
                     self.logger.warning("Unhandled message: %s", airbyte_message)
         # Daemon threads will be terminated when the main thread exits,
