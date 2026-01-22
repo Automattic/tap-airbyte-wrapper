@@ -34,12 +34,10 @@ from uuid import UUID
 import click
 import orjson
 import requests
-import singer_sdk._singerlib as singer
+import singer_sdk.singerlib as singer
 import virtualenv
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
-from singer_sdk.cli import common_options
-from singer_sdk.helpers._classproperty import classproperty
 
 from tap_airbyte.yarn.main import run_yarn_service, wait_for_file
 
@@ -249,107 +247,6 @@ class TapAirbyte(Tap):
     airbyte_state: t.Dict[str, t.Any] = {}
 
     ORJSON_OPTS = orjson.OPT_APPEND_NEWLINE
-
-    @classproperty
-    def cli(cls) -> t.Callable:
-        @common_options.PLUGIN_VERSION
-        @common_options.PLUGIN_ABOUT
-        @common_options.PLUGIN_CONFIG
-        @click.option(
-            "--discover",
-            is_flag=True,
-            help="Run the tap in discovery mode.",
-        )
-        @click.option(
-            "--test",
-            is_flag=True,
-            help="Use --test to run the Airbyte connection test.",
-        )
-        @click.option(
-            "--catalog",
-            help="Use a Singer catalog file with the tap.",
-            type=click.Path(),
-        )
-        @click.option(
-            "--state",
-            help="Use a bookmarks file for incremental replication.",
-            type=click.Path(),
-        )
-        @click.command(
-            help="Execute the Singer tap.",
-            context_settings={"help_option_names": ["--help"]},
-        )
-        def cli(
-                version: bool = False,
-                about: bool = False,
-                discover: bool = False,
-                test: bool = False,
-                config: tuple[str, ...] = (),
-                state: t.Optional[str] = None,
-                catalog: t.Optional[str] = None,
-                cli_format: t.Optional[str] = None,
-        ) -> None:
-            if version:
-                cls.print_version()
-                return
-            if not about:
-                cls.print_version(print_fn=cls.logger.info)
-            validate_config: bool = True
-            if discover or about:
-                validate_config = False
-            parse_env_config = False
-            config_files: list[PurePath] = []
-            for config_path in config:
-                if config_path == "ENV":
-                    parse_env_config = True
-                    continue
-                if not Path(config_path).is_file():
-                    raise FileNotFoundError(
-                        f"Could not locate config file at '{config_path}'."
-                        "Please check that the file exists."
-                    )
-                config_files.append(Path(config_path))
-            # Enrich about info with spec if possible
-            if about:
-                cls.discover_streams = lambda *_: t.cast(t.List[AirbyteStream], [])
-                try:
-                    tap: TapAirbyte = cls(  # type: ignore
-                        config=config_files or None,
-                        state=state,
-                        catalog=catalog,
-                        parse_env_config=parse_env_config,
-                        validate_config=validate_config,
-                    )
-                    spec = tap.run_spec()["connectionSpecification"]
-                except Exception:
-                    cls.logger.info("Tap-Airbyte instantiation failed. Printing basic about info.")
-                    cls.print_about(output_format=cli_format)
-                else:
-                    cls.logger.info(
-                        "Tap-Airbyte instantiation succeeded. Printing spec-enriched about info."
-                    )
-                    cls.config_jsonschema["properties"]["airbyte_config"] = spec
-                    cls.print_about(output_format=cli_format)
-                    cls.print_spec_as_config(spec)
-                return
-            # End modification
-            tap: TapAirbyte = cls(  # type: ignore
-                config=config_files or None,
-                state=state,
-                catalog=catalog,
-                parse_env_config=parse_env_config,
-                validate_config=validate_config,
-            )
-            if discover:
-                tap.run_discovery()
-                if test:
-                    tap.run_connection_test()
-            elif test:
-                tap.run_connection_test()
-            else:
-                tap.sync_all()
-
-        return cli
 
     def _ensure_oci(self) -> None:
         """Ensure that the OCI runtime is installed and available."""
