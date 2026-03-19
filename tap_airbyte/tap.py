@@ -574,6 +574,7 @@ class TapAirbyte(Tap):
             )
             try:
                 # Context is held until EOF or exception
+                raise Exception("Simulated crash for testing YARN app kill logic.")
                 yield proc
             finally:
                 if not self.eof_received:

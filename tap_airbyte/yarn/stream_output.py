@@ -12,8 +12,6 @@ def main():
                         help="Yarn application id to wait for.")
     args = parser.parse_args()
 
-    raise Exception("Simulated crash for testing YARN app kill logic.")
-
     stream_file(
         file_path=args.file_path,
         yarn_config=json.loads(args.yarn_config),
