@@ -149,6 +149,14 @@ def get_yarn_service_application_info(yarn_config: YarnConfig, app_id: str) -> Y
     return response.json().get('app', {})
 
 
+def kill_yarn_app(yarn_config: dict, app_id: str) -> None:
+    session = _create_session(yarn_config)
+    url = f"{yarn_config.get('base_url')}/ws/v1/cluster/apps/{app_id}/state"
+    response = session.put(url, json={"state": "KILLED"})
+    response.raise_for_status()
+    logger.info("Killed YARN application %s", app_id)
+
+
 def is_airbyte_app_running(yarn_config: dict, app_id: str) -> bool:
     app_info = get_yarn_service_application_info(yarn_config, app_id)
     logger.info(app_info)

@@ -39,7 +39,7 @@ import virtualenv
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
 
-from tap_airbyte.yarn.main import run_yarn_service, wait_for_file
+from tap_airbyte.yarn.main import run_yarn_service, wait_for_file, kill_yarn_app
 
 # Sentinel value for broken pipe
 PIPE_CLOSED = object()
@@ -577,6 +577,11 @@ class TapAirbyte(Tap):
                 yield proc
             finally:
                 if not self.eof_received:
+                    # On YARN, proc is the stream_output.py watcher — the actual YARN app
+                    # keeps running after proc is killed, so we must kill it explicitly.
+                    if self.run_on_yarn and "--app_id" in proc.args:
+                        app_id = proc.args[proc.args.index("--app_id") + 1]
+                        kill_yarn_app(self.config["yarn_service_config"], app_id)
                     proc.kill()
                     self.logger.warning("Airbyte process terminated before EOF message received.")
                 self.logger.debug("Waiting for Airbyte process to terminate.")
