@@ -251,7 +251,7 @@ class TimeoutException(Exception):
     pass
 
 
-def wait_for_file(file_path, yarn_config, app_id, timeout=300, interval=1):
+def wait_for_file(file_path, yarn_config, app_id, timeout=300, interval=10):
     """
     Waits for a file to be created within a specified timeout.
 
@@ -269,14 +269,12 @@ def wait_for_file(file_path, yarn_config, app_id, timeout=300, interval=1):
     while time() - start_time < timeout:
         if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
             return # File created and not empty
+        # Bail out immediately if the YARN app failed; otherwise keep
+        # polling for the file (the app may have finished cleanly but
+        # the FUSE-side rename can take a moment to become visible).
         app_info = get_yarn_service_application_info(yarn_config, app_id)
-        if is_yarn_app_terminated(app_info):
-            # Only raise if the YARN app actually failed; a successful
-            # run with no output is legitimate (e.g., empty stream) — let
-            # stream_file handle the missing/empty file downstream.
-            if is_yarn_app_failed(app_info):
-                raise Exception(f"Yarn application {app_id} failed.")
-            return
+        if is_yarn_app_terminated(app_info) and is_yarn_app_failed(app_info):
+            raise Exception(f"Yarn application {app_id} failed.")
         sleep(interval)
     raise TimeoutException(f"File not created after {timeout}: {file_path}")
 
