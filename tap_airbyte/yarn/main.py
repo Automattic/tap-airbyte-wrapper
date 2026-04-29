@@ -19,12 +19,17 @@ YARN_APP_FAILED_STATES = {'FAILED', 'KILLED'}
 YARN_APP_TERMINAL_STATES = {'FINISHED'} | YARN_APP_FAILED_STATES
 
 # Helper executed inside the Airbyte container: reads stdout line-by-line and
-# closes+reopens the file every 20s. fuse_dfs's fsync is weakly implemented
-# and HDFS does not publish length to readers until the file is closed;
-# close() is the only operation that reliably commits bytes, so we
-# close+reopen periodically to flush in-flight data to the Meltano reader.
-# 20s interval keeps NameNode RPC load low (each commit costs two RPCs:
-# close + open-append) while still giving readers timely visibility.
+# periodically closes + reopens the output file every 20s.
+#
+# When writing through fuse_dfs to HDFS, fsync() may not reliably make newly
+# appended bytes visible to concurrent readers. In this environment, readers
+# consistently observe progress only after a close/reopen boundary.
+#
+# To force publication of in-flight data to the Meltano reader, the helper
+# periodically closes and reopens the file in append mode.
+#
+# A 20s interval reduces NameNode metadata RPC churn (close + append-open)
+# while still providing reasonably fresh progress updates.
 _FSYNC_HELPER = textwrap.dedent("""
     import os, sys, time
     path = sys.argv[1]
