@@ -19,15 +19,18 @@ YARN_APP_FAILED_STATES = {'FAILED', 'KILLED'}
 YARN_APP_TERMINAL_STATES = {'FINISHED'} | YARN_APP_FAILED_STATES
 
 # Helper executed inside the Airbyte container: reads stdout line-by-line and
-# fsyncs after each write so fuse_dfs issues an hsync to HDFS, making bytes
-# visible to the Meltano-side reader without waiting for the writer to close.
+# pauses 5s every 30s of writing — testing whether giving fuse_dfs idle time
+# is enough for HDFS to expose written bytes to the Meltano-side reader.
 _FSYNC_HELPER = textwrap.dedent("""
-    import os, sys
+    import os, sys, time
     fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    last_pause = time.monotonic()
     try:
         for line in sys.stdin.buffer:
             os.write(fd, line)
-            os.fsync(fd)
+            if time.monotonic() - last_pause >= 30:
+                time.sleep(5)
+                last_pause = time.monotonic()
     finally:
         os.close(fd)
 """).strip()
