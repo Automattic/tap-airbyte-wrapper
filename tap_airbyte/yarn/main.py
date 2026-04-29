@@ -269,14 +269,14 @@ def wait_for_file(file_path, yarn_config, app_id, timeout=300, interval=1):
     while time() - start_time < timeout:
         if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
             return # File created and not empty
-        # is_airbyte_app_running raises if the YARN app failed; returns
-        # False if it finished cleanly without ever creating the output
-        # file (also a failure from our POV — main.py succeeded but
-        # produced no stdout).
-        if not is_airbyte_app_running(yarn_config, app_id):
-            raise Exception(
-                f"YARN app {app_id} terminated before creating {file_path}"
-            )
+        app_info = get_yarn_service_application_info(yarn_config, app_id)
+        if is_yarn_app_terminated(app_info):
+            # Only raise if the YARN app actually failed; a successful
+            # run with no output is legitimate (e.g., empty stream) — let
+            # stream_file handle the missing/empty file downstream.
+            if is_yarn_app_failed(app_info):
+                raise Exception(f"Yarn application {app_id} failed.")
+            return
         sleep(interval)
     raise TimeoutException(f"File not created after {timeout}: {file_path}")
 
