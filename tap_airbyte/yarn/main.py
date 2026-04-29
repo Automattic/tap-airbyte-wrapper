@@ -1,4 +1,5 @@
 import os
+import textwrap
 from datetime import datetime
 from time import sleep, time
 from typing import TypedDict, Mapping, Any
@@ -16,6 +17,20 @@ logger = logging.getLogger(__name__)
 
 YARN_APP_FAILED_STATES = {'FAILED', 'KILLED'}
 YARN_APP_TERMINAL_STATES = {'FINISHED'} | YARN_APP_FAILED_STATES
+
+# Helper executed inside the Airbyte container: reads stdout line-by-line and
+# fsyncs after each write so fuse_dfs issues an hsync to HDFS, making bytes
+# visible to the Meltano-side reader without waiting for the writer to close.
+_FSYNC_HELPER = textwrap.dedent("""
+    import os, sys
+    fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        for line in sys.stdin.buffer:
+            os.write(fd, line)
+            os.fsync(fd)
+    finally:
+        os.close(fd)
+""").strip()
 
 class YarnConfig(TypedDict):
     base_url: str
@@ -46,8 +61,9 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     airbyte_tag = config['airbyte_spec'].get('tag', 'latest')
     airbyte_mount_dir = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
     main_command = command.split()[0].lstrip("--")
-    output_file = f'stdout-{command.split()[0].lstrip("--")}'
+    output_file = f'stdout-{main_command}'
     output_file_path = os.path.join(runtime_tmp_dir, output_file)
+    stderr_file_path = os.path.join(runtime_tmp_dir, "stderr")
     service_hash = hashlib.sha256(f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{runtime_tmp_dir.split('/')[-1].split('-')[-1]}".encode()).hexdigest()
     service_name = f"{airbyte_image.split('/')[-1]}-{service_hash[:10]}"
     service_config = {
@@ -63,9 +79,19 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
                 "id": f"{airbyte_image}:{airbyte_tag}",
                 "type": "DOCKER"
             },
-            # Redirect the stdout to a file so it can be read by Meltano
+            # Pipe stdout through a Python helper that fsyncs after each line
+            # (fuse_dfs translates fsync -> libhdfs hsync, making bytes visible
+            # to the Meltano-side reader without waiting for close).
+            # Combined stderr from both processes is captured to a file so it
+            # can be surfaced on the Meltano side when the app fails.
+            # `exit ${PIPESTATUS[0]}` makes the YARN app exit with main.py's
+            # status, not the helper's, so Airbyte failures are not masked.
             # config and catalog files should be place on the mounted volume
-            "launch_command": f'"python main.py {command} > {output_file_path}"',
+            "launch_command": (
+                f'"{{ python -u main.py {command} | '
+                f"python -u -c '{_FSYNC_HELPER}' "
+                f'{output_file_path}; exit ${{PIPESTATUS[0]}}; }} 2>{stderr_file_path}"'
+            ),
             "resource": {
               "cpus": 2,
               "memory": "1024"

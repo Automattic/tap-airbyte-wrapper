@@ -590,7 +590,16 @@ class TapAirbyte(Tap):
                     # If EOF was not received, the process was killed and we should raise an exception
                     type_, value, _ = sys.exc_info()
                     err = type_.__name__ if type_ else "UnknownError"
-                    raise AirbyteException(f"Airbyte process terminated early:\n{err}: {value}")
+                    msg = f"Airbyte process terminated early:\n{err}: {value}"
+                    # On YARN, surface anything written to the container's stderr file.
+                    if self.run_on_yarn:
+                        stderr_path = os.path.join(host_tmpdir, "stderr")
+                        if os.path.exists(stderr_path):
+                            with open(stderr_path, "r", errors="replace") as f:
+                                yarn_stderr = f.read()
+                            if yarn_stderr:
+                                msg += f"\nContainer stderr:\n{yarn_stderr}"
+                    raise AirbyteException(msg)
                 if returncode != 0 and TapAirbyte.pipe_status is not PIPE_CLOSED:
                     # If EOF was received, the process should have exited with return code 0
                     raise AirbyteException(
