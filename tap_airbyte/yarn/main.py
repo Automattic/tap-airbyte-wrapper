@@ -64,6 +64,19 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     output_file = f'stdout-{main_command}'
     output_file_path = os.path.join(runtime_tmp_dir, output_file)
     stderr_file_path = os.path.join(runtime_tmp_dir, "stderr")
+    launch_script_path = os.path.join(runtime_tmp_dir, "launch.sh")
+    # Write the launch logic to a script on the shared FUSE mount and have
+    # YARN run `bash launch.sh`. Keeps brace groups, pipes, the multi-line
+    # Python helper, and ${PIPESTATUS[0]} inside the file so YARN's argv
+    # tokenization of launch_command can't break them.
+    launch_script = textwrap.dedent(f"""\
+        #!/bin/bash
+        {{ python -u main.py {command} | python -u -c '{_FSYNC_HELPER}' {output_file_path}
+          exit ${{PIPESTATUS[0]}}
+        }} 2>{stderr_file_path}
+    """)
+    with open(launch_script_path, "w") as f:
+        f.write(launch_script)
     service_hash = hashlib.sha256(f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{runtime_tmp_dir.split('/')[-1].split('-')[-1]}".encode()).hexdigest()
     service_name = f"{airbyte_image.split('/')[-1]}-{service_hash[:10]}"
     service_config = {
@@ -79,19 +92,10 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
                 "id": f"{airbyte_image}:{airbyte_tag}",
                 "type": "DOCKER"
             },
-            # Pipe stdout through a Python helper that fsyncs after each line
-            # (fuse_dfs translates fsync -> libhdfs hsync, making bytes visible
-            # to the Meltano-side reader without waiting for close).
-            # Combined stderr from both processes is captured to a file so it
-            # can be surfaced on the Meltano side when the app fails.
-            # `exit ${PIPESTATUS[0]}` makes the YARN app exit with main.py's
-            # status, not the helper's, so Airbyte failures are not masked.
-            # config and catalog files should be place on the mounted volume
-            "launch_command": (
-                f'"{{ python -u main.py {command} | '
-                f"python -u -c '{_FSYNC_HELPER}' "
-                f'{output_file_path}; exit ${{PIPESTATUS[0]}}; }} 2>{stderr_file_path}"'
-            ),
+            # All launch logic (pipe to fsync helper, PIPESTATUS, stderr
+            # capture) lives in launch.sh — see above. config and catalog
+            # files should be place on the mounted volume.
+            "launch_command": f'"bash {launch_script_path}"',
             "resource": {
               "cpus": 2,
               "memory": "1024"
