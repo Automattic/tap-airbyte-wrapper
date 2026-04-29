@@ -18,33 +18,44 @@ logger = logging.getLogger(__name__)
 YARN_APP_FAILED_STATES = {'FAILED', 'KILLED'}
 YARN_APP_TERMINAL_STATES = {'FINISHED'} | YARN_APP_FAILED_STATES
 
-# Helper executed inside the Airbyte container: reads stdout line-by-line and
-# periodically closes + reopens the output file every 20s.
+# Helper executed inside the Airbyte container: appends main.py's stdout to
+# a local-disk buffer file and periodically copies it to the FUSE output
+# path via an atomic rename.
 #
-# When writing through fuse_dfs to HDFS, fsync() may not reliably make newly
-# appended bytes visible to concurrent readers. In this environment, readers
-# consistently observe progress only after a close/reopen boundary.
+# fuse_dfs's fsync() is weakly implemented and HDFS append (O_APPEND) is
+# not supported on this cluster (write returns EOPNOTSUPP). The only way
+# to publish in-flight bytes is to write a complete file and close it.
+# Doing it via temp-file + rename keeps readers from ever seeing a partial
+# state — HDFS rename is atomic, and each new version is a strict superset
+# of the previous one, so position-based incremental reads remain correct.
 #
-# To force publication of in-flight data to the Meltano reader, the helper
-# periodically closes and reopens the file in append mode.
+# Buffering on /tmp (container-local disk) instead of process memory keeps
+# RAM bounded regardless of stream size, at the cost of local disk usage
+# proportional to total output.
 #
-# A 20s interval reduces NameNode metadata RPC churn (close + append-open)
-# while still providing reasonably fresh progress updates.
+# 20s interval keeps NameNode RPC load down (each commit copies the full
+# buffer + 1 rename) while still giving readers timely visibility.
 _FSYNC_HELPER = textwrap.dedent("""
-    import os, sys, time
+    import os, sys, time, shutil
     path = sys.argv[1]
-    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
-    fd = os.open(path, flags, 0o644)
+    tmp = path + ".tmp"
+    local = "/tmp/airbyte_buf"
+    buf_fd = os.open(local, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     last_commit = time.monotonic()
+
+    def commit():
+        shutil.copyfile(local, tmp)
+        os.rename(tmp, path)
+
     try:
         for line in sys.stdin.buffer:
-            os.write(fd, line)
+            os.write(buf_fd, line)
             if time.monotonic() - last_commit >= 20:
-                os.close(fd)
-                fd = os.open(path, flags, 0o644)
+                commit()
                 last_commit = time.monotonic()
     finally:
-        os.close(fd)
+        os.close(buf_fd)
+        commit()
 """).strip()
 
 class YarnConfig(TypedDict):
@@ -240,11 +251,16 @@ class TimeoutException(Exception):
     pass
 
 
-def wait_for_file(file_path, timeout=300, interval=1):
+def wait_for_file(file_path, yarn_config, app_id, timeout=300, interval=1):
     """
     Waits for a file to be created within a specified timeout.
 
+    Bails out early if the YARN app terminates before the file appears,
+    instead of polling the (never-created) file for the full timeout.
+
     :param file_path: Path to the file to wait for.
+    :param yarn_config: YARN config used to poll application status.
+    :param app_id: YARN application id used to poll application status.
     :param timeout: Maximum time to wait for the file, in seconds.
     :param interval: Time between checks, in seconds.
     :return: True if the file is created, False if the timeout is reached.
@@ -253,6 +269,14 @@ def wait_for_file(file_path, timeout=300, interval=1):
     while time() - start_time < timeout:
         if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
             return # File created and not empty
+        # is_airbyte_app_running raises if the YARN app failed; returns
+        # False if it finished cleanly without ever creating the output
+        # file (also a failure from our POV — main.py succeeded but
+        # produced no stdout).
+        if not is_airbyte_app_running(yarn_config, app_id):
+            raise Exception(
+                f"YARN app {app_id} terminated before creating {file_path}"
+            )
         sleep(interval)
     raise TimeoutException(f"File not created after {timeout}: {file_path}")
 

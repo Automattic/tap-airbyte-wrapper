@@ -37,25 +37,40 @@ def test_read_file(capfd, start_position, expected_output, expected_position):
 
 def test_wait_for_file_success():
     file_path = "/path/to/testfile"
+    yarn_config = {"key": "value"}
+    app_id = "app_123"
 
-    with patch("os.path.exists") as mock_exists:
+    with patch("os.path.exists") as mock_exists, \
+            patch("tap_airbyte.yarn.main.is_airbyte_app_running", return_value=True):
         # Simulate the file being created on the second check
         mock_exists.side_effect = [False, False, True]
 
-        # Call the method
-        wait_for_file(file_path, timeout=10, interval=1)
+        wait_for_file(file_path, yarn_config, app_id, timeout=10, interval=1)
 
-        # Assert `os.path.exists` was called
         assert mock_exists.call_count == 3
 
 
 def test_wait_for_file_timeout():
     file_path = "/path/to/nonexistentfile"
+    yarn_config = {"key": "value"}
+    app_id = "app_123"
 
-    with patch("os.path.exists", return_value=False):
-        # Expect the function to raise a TimeoutException
+    with patch("os.path.exists", return_value=False), \
+            patch("tap_airbyte.yarn.main.is_airbyte_app_running", return_value=True):
         with pytest.raises(TimeoutException, match=f"File not created after 5: {file_path}"):
-            wait_for_file(file_path, timeout=5, interval=1)
+            wait_for_file(file_path, yarn_config, app_id, timeout=5, interval=1)
+
+
+def test_wait_for_file_yarn_app_terminated():
+    file_path = "/path/to/nonexistentfile"
+    yarn_config = {"key": "value"}
+    app_id = "app_123"
+
+    with patch("os.path.exists", return_value=False), \
+            patch("tap_airbyte.yarn.main.is_airbyte_app_running", return_value=False):
+        # YARN app finished without creating the file -> bail out early.
+        with pytest.raises(Exception, match=f"YARN app {app_id} terminated before creating {file_path}"):
+            wait_for_file(file_path, yarn_config, app_id, timeout=60, interval=1)
 
 
 def test_stream_file(mock_sleep):
