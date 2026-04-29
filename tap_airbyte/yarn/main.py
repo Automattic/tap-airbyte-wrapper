@@ -19,33 +19,33 @@ YARN_APP_FAILED_STATES = {'FAILED', 'KILLED'}
 YARN_APP_TERMINAL_STATES = {'FINISHED'} | YARN_APP_FAILED_STATES
 
 # Helper executed inside the Airbyte container: appends main.py's stdout to
-# a local-disk buffer file and periodically copies it to the FUSE output
-# path via an atomic rename.
+# a local-disk buffer file and periodically copies it directly to the FUSE
+# output path (overwriting in place).
 #
-# fuse_dfs's fsync() is weakly implemented and HDFS append (O_APPEND) is
-# not supported on this cluster (write returns EOPNOTSUPP). The only way
-# to publish in-flight bytes is to write a complete file and close it.
-# Doing it via temp-file + rename keeps readers from ever seeing a partial
-# state — HDFS rename is atomic, and each new version is a strict superset
-# of the previous one, so position-based incremental reads remain correct.
+# fuse_dfs on this cluster doesn't reliably support fsync, O_APPEND, or
+# os.rename (each fails with EOPNOTSUPP / EIO). What does work is plain
+# create-write-close, so each commit `shutil.copyfile(local, path)` opens
+# the destination fresh, writes all accumulated bytes, and closes —
+# committing on close.
 #
 # Buffering on /tmp (container-local disk) instead of process memory keeps
 # RAM bounded regardless of stream size, at the cost of local disk usage
 # proportional to total output.
 #
-# 20s interval keeps NameNode RPC load down (each commit copies the full
-# buffer + 1 rename) while still giving readers timely visibility.
+# 20s interval keeps NameNode RPC load down while still giving readers
+# timely visibility. Caveat: a reader that opens `path` while we're in the
+# middle of a copy can see a truncated file — `read_file` opens fresh on
+# every iteration of `stream_file`, so a stale/short read just returns
+# early and the next pass picks up the rest.
 _FSYNC_HELPER = textwrap.dedent("""
     import os, sys, time, shutil
     path = sys.argv[1]
-    tmp = path + ".tmp"
     local = "/tmp/airbyte_buf"
     buf_fd = os.open(local, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     last_commit = time.monotonic()
 
     def commit():
-        shutil.copyfile(local, tmp)
-        os.rename(tmp, path)
+        shutil.copyfile(local, path)
 
     try:
         for line in sys.stdin.buffer:
