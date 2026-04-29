@@ -19,18 +19,25 @@ YARN_APP_FAILED_STATES = {'FAILED', 'KILLED'}
 YARN_APP_TERMINAL_STATES = {'FINISHED'} | YARN_APP_FAILED_STATES
 
 # Helper executed inside the Airbyte container: reads stdout line-by-line and
-# pauses 5s every 30s of writing — testing whether giving fuse_dfs idle time
-# is enough for HDFS to expose written bytes to the Meltano-side reader.
+# closes+reopens the file every 20s. fuse_dfs's fsync is weakly implemented
+# and HDFS does not publish length to readers until the file is closed;
+# close() is the only operation that reliably commits bytes, so we
+# close+reopen periodically to flush in-flight data to the Meltano reader.
+# 20s interval keeps NameNode RPC load low (each commit costs two RPCs:
+# close + open-append) while still giving readers timely visibility.
 _FSYNC_HELPER = textwrap.dedent("""
     import os, sys, time
-    fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-    last_pause = time.monotonic()
+    path = sys.argv[1]
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+    fd = os.open(path, flags, 0o644)
+    last_commit = time.monotonic()
     try:
         for line in sys.stdin.buffer:
             os.write(fd, line)
-            if time.monotonic() - last_pause >= 30:
-                time.sleep(5)
-                last_pause = time.monotonic()
+            if time.monotonic() - last_commit >= 20:
+                os.close(fd)
+                fd = os.open(path, flags, 0o644)
+                last_commit = time.monotonic()
     finally:
         os.close(fd)
 """).strip()
