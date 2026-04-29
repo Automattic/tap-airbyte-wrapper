@@ -79,19 +79,39 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     output_file = f'stdout-{main_command}'
     output_file_path = os.path.join(runtime_tmp_dir, output_file)
     stderr_file_path = os.path.join(runtime_tmp_dir, "stderr")
+    helper_path = os.path.join(runtime_tmp_dir, "helper.py")
     launch_script_path = os.path.join(runtime_tmp_dir, "launch.sh")
-    # Write the launch logic to a script on the shared FUSE mount and have
-    # YARN run `bash launch.sh`. Keeps brace groups, pipes, the multi-line
-    # Python helper, and ${PIPESTATUS[0]} inside the file so YARN's argv
-    # tokenization of launch_command can't break them.
+    # Write helper.py and launch.sh to the shared FUSE mount and have YARN
+    # run `sh launch.sh`. Use a FIFO (not a pipe) so we can capture and
+    # exit with main.py's status via `$?` — bash-only `${PIPESTATUS[0]}`
+    # gets misparsed by dash as "Invalid argument number". The helper
+    # lives in its own file to sidestep multi-line `python -c '...'`
+    # quoting concerns.
+    with open(helper_path, "w") as f:
+        f.write(_FSYNC_HELPER + "\n")
     launch_script = textwrap.dedent(f"""\
-        #!/bin/bash
-        {{ python -u main.py {command} | python -u -c '{_FSYNC_HELPER}' {output_file_path}
-          exit ${{PIPESTATUS[0]}}
+        #!/bin/sh
+        {{
+          # Named pipe in container-local /tmp
+          mkfifo /tmp/airbyte_pipe
+          # Helper drains the FIFO and writes to the FUSE output file,
+          # closing+reopening every 20s so HDFS commits in-flight bytes.
+          python -u {helper_path} {output_file_path} </tmp/airbyte_pipe &
+          HELPER_PID=$!
+          python -u main.py {command} >/tmp/airbyte_pipe
+          # Capture main.py's exit status; wait for helper to flush; exit
+          # with main.py's status so YARN reflects Airbyte's success/fail.
+          EC=$?
+          wait $HELPER_PID
+          exit $EC
         }} 2>{stderr_file_path}
     """)
     with open(launch_script_path, "w") as f:
         f.write(launch_script)
+    # +x so the wrapper image's `sh -c` entrypoint can exec the path
+    # directly (kernel honors the shebang). launch_command is just the
+    # path — no spaces, no tokenization worry.
+    os.chmod(launch_script_path, 0o755)
     service_hash = hashlib.sha256(f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{runtime_tmp_dir.split('/')[-1].split('-')[-1]}".encode()).hexdigest()
     service_name = f"{airbyte_image.split('/')[-1]}-{service_hash[:10]}"
     service_config = {
@@ -107,10 +127,13 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
                 "id": f"{airbyte_image}:{airbyte_tag}",
                 "type": "DOCKER"
             },
-            # All launch logic (pipe to fsync helper, PIPESTATUS, stderr
-            # capture) lives in launch.sh — see above. config and catalog
-            # files should be place on the mounted volume.
-            "launch_command": f'"bash {launch_script_path}"',
+            # All launch logic (FIFO between main.py and the fsync helper,
+            # exit-code capture, stderr capture) lives in launch.sh — see
+            # above. The wrapper image's entrypoint is `["/bin/sh", "-c"]`,
+            # so passing just the script path lets sh -c exec it directly
+            # and the kernel honors the shebang. config and catalog files
+            # should be place on the mounted volume.
+            "launch_command": f'"{launch_script_path}"',
             "resource": {
               "cpus": 2,
               "memory": "1024"
