@@ -7,7 +7,7 @@ import pytest
 
 from tap_airbyte.yarn.service import _HDFS_PUT_HELPER, CONTAINER_CONF_DIR, run_yarn_service
 from tap_airbyte.yarn.streaming import TimeoutException, read_file, stream_file, wait_for_file
-from tap_airbyte.yarn.webhdfs import hdfs_file_length, hdfs_read_file, hdfs_write_file
+from tap_airbyte.yarn.webhdfs import hdfs_file_length, hdfs_mkdirs, hdfs_read_file, hdfs_write_file
 
 YARN_CONFIG = {"base_url": "https://gateway.example.com", "username": "u", "password": "p"}
 
@@ -47,7 +47,7 @@ def test_hdfs_write_file_follows_307_redirect_with_body():
 
     first, second = session.request.call_args_list
     assert first.args == ("PUT", "https://gateway.example.com/webhdfs/v1/tmp/f")
-    assert first.kwargs["params"] == {"op": "CREATE", "overwrite": "true"}
+    assert first.kwargs["params"] == {"op": "CREATE", "overwrite": "true", "permission": "600"}
     assert first.kwargs["data"] == b"hello"
     assert first.kwargs["allow_redirects"] is False
     # Redirect target hit with the same method and body.
@@ -93,6 +93,14 @@ def test_hdfs_read_file_returns_empty_when_missing():
     session.request.return_value = _response(404)
     with patch("tap_airbyte.yarn.webhdfs.create_session", return_value=session):
         assert hdfs_read_file(YARN_CONFIG, "/tmp/f", offset=6) == b""
+
+
+def test_hdfs_mkdirs_defaults_to_owner_only():
+    session = MagicMock()
+    session.request.return_value = _response(200, json_data={"boolean": True})
+    with patch("tap_airbyte.yarn.webhdfs.create_session", return_value=session):
+        hdfs_mkdirs(YARN_CONFIG, "/user/u/.airbyte/run1")
+    assert session.request.call_args.kwargs["params"] == {"op": "MKDIRS", "permission": "700"}
 
 
 def test_webhdfs_uses_webhdfs_base_url_override():
@@ -292,12 +300,15 @@ def test_run_yarn_service_uploads_files_and_localizes_them(tmp_path, monkeypatch
     command = f"read --config {CONTAINER_CONF_DIR}/config.json --catalog {CONTAINER_CONF_DIR}/catalog.json"
 
     with patch("tap_airbyte.yarn.service.hdfs_write_file") as mock_write, \
+            patch("tap_airbyte.yarn.service.hdfs_mkdirs") as mock_mkdirs, \
             patch("tap_airbyte.yarn.service.create_session", return_value=session), \
             patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
         app_id, hdfs_output_path = run_yarn_service(config, command, str(runtime_tmp_dir))
 
     assert app_id == "app_1"
     assert hdfs_output_path == "/tmp/.airbyte/tmpabc123/stdout-read"
+    # Run dir created owner-only before any upload.
+    mock_mkdirs.assert_called_once_with(YARN_CONFIG, "/tmp/.airbyte/tmpabc123")
 
     # helper.py, launch.sh, and both staged files are uploaded over WebHDFS.
     uploaded = {call.args[1] for call in mock_write.call_args_list}
@@ -343,6 +354,7 @@ def test_run_yarn_service_defaults_hdfs_base_to_user_home(tmp_path, monkeypatch)
     session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
 
     with patch("tap_airbyte.yarn.service.hdfs_write_file"), \
+            patch("tap_airbyte.yarn.service.hdfs_mkdirs"), \
             patch("tap_airbyte.yarn.service.create_session", return_value=session), \
             patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
         _, hdfs_output_path = run_yarn_service(config, "read", str(runtime_tmp_dir))
@@ -368,8 +380,8 @@ def _run_helper(tmp_path, stdin_bytes):
     fake_hdfs = bin_dir / "hdfs"
     fake_hdfs.write_text(
         "#!/bin/sh\n"
-        '[ "$1" = "dfs" ] && [ "$2" = "-put" ] && [ "$3" = "-f" ] || exit 99\n'
-        'cp -f "$4" "$5"\n'
+        '[ "$1" = "dfs" ] && [ "$4" = "-put" ] && [ "$5" = "-f" ] || exit 99\n'
+        'cp -f "$6" "$7"\n'
     )
     fake_hdfs.chmod(0o755)
     helper_code = _HDFS_PUT_HELPER.replace("/tmp/airbyte_buf", str(local_buf))
@@ -434,7 +446,7 @@ def test_hdfs_put_helper_invokes_hdfs_put(tmp_path):
     fake_hdfs.write_text(
         "#!/bin/sh\n"
         f'echo "$@" >> "{record_file}"\n'
-        'cp -f "$4" "$5"\n'
+        'cp -f "$6" "$7"\n'
     )
     fake_hdfs.chmod(0o755)
     helper_code = _HDFS_PUT_HELPER.replace("/tmp/airbyte_buf", str(local_buf))
@@ -449,9 +461,9 @@ def test_hdfs_put_helper_invokes_hdfs_put(tmp_path):
     assert proc.returncode == 0, proc.stderr.decode()
     calls = record_file.read_text().splitlines()
     assert calls, "hdfs was never invoked"
-    # Every recorded call should be a `dfs -put -f <local> <hdfs>`.
+    # Every recorded call: `dfs -D fs.permissions.umask-mode=077 -put -f <local> <hdfs>`.
     for call in calls:
         parts = call.split()
-        assert parts[:3] == ["dfs", "-put", "-f"]
-        assert parts[3] == str(local_buf)
-        assert parts[4] == str(output_path)
+        assert parts[:5] == ["dfs", "-D", "fs.permissions.umask-mode=077", "-put", "-f"]
+        assert parts[5] == str(local_buf)
+        assert parts[6] == str(output_path)

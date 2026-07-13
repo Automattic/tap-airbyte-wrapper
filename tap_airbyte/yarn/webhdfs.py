@@ -31,13 +31,24 @@ def _webhdfs_request(yarn_config: YarnConfig, method: str, hdfs_path: str, op: s
     return response
 
 
-def hdfs_write_file(yarn_config: YarnConfig, hdfs_path: str, content) -> None:
-    """Create (or overwrite) an HDFS file with the given content."""
+def hdfs_write_file(yarn_config: YarnConfig, hdfs_path: str, content, permission: str = "600") -> None:
+    """Create (or overwrite) an HDFS file with the given content.
+
+    Defaults to owner-only permission — uploads carry connector credentials.
+    YARN localizes them as the submitting user, so 600 is enough.
+    """
     if isinstance(content, str):
         content = content.encode("utf-8")
     response = _webhdfs_request(
-        yarn_config, "PUT", hdfs_path, "CREATE", {"overwrite": "true"}, data=content
+        yarn_config, "PUT", hdfs_path, "CREATE",
+        {"overwrite": "true", "permission": permission}, data=content
     )
+    response.raise_for_status()
+
+
+def hdfs_mkdirs(yarn_config: YarnConfig, hdfs_path: str, permission: str = "700") -> None:
+    """Create a directory (and parents) with owner-only permission by default."""
+    response = _webhdfs_request(yarn_config, "PUT", hdfs_path, "MKDIRS", {"permission": permission})
     response.raise_for_status()
 
 

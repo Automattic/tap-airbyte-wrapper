@@ -11,7 +11,7 @@ import hashlib
 from tenacity import retry, stop_after_delay, wait_fixed
 
 from tap_airbyte.yarn.session import YarnConfig, YarnApplicationInfo, create_session
-from tap_airbyte.yarn.webhdfs import hdfs_write_file
+from tap_airbyte.yarn.webhdfs import hdfs_mkdirs, hdfs_write_file
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,8 @@ _HDFS_PUT_HELPER = textwrap.dedent("""
     def commit():
         buf.flush()
         subprocess.run(
-            ["hdfs", "dfs", "-put", "-f", local, hdfs_path],
+            ["hdfs", "dfs", "-D", "fs.permissions.umask-mode=077",
+             "-put", "-f", local, hdfs_path],
             check=True,
         )
 
@@ -90,6 +91,8 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
         wait $HELPER_PID
         exit $EC
     """)
+    # Owner-only dir; the uploaded files default to 600 in hdfs_write_file.
+    hdfs_mkdirs(yarn_config, hdfs_runtime_dir)
     hdfs_write_file(yarn_config, posixpath.join(hdfs_runtime_dir, "helper.py"), _HDFS_PUT_HELPER + "\n")
     hdfs_write_file(yarn_config, posixpath.join(hdfs_runtime_dir, "launch.sh"), launch_script)
     localized_files = ["helper.py", "launch.sh"]
