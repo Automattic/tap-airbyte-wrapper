@@ -29,13 +29,14 @@ CONTAINER_CONF_DIR = "/tmp/airbyte"
 # committed file's prefix is stable and byte offsets stay valid across
 # commits; the Meltano side reads it with WebHDFS offset reads (`read_file`).
 _HDFS_PUT_HELPER = textwrap.dedent("""
-    import os, sys, time, subprocess
+    import sys, time, subprocess
     hdfs_path = sys.argv[1]
     local = "/tmp/airbyte_buf"
-    buf_fd = os.open(local, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    buf = open(local, "wb")
     last_commit = time.monotonic()
 
     def commit():
+        buf.flush()
         subprocess.run(
             ["hdfs", "dfs", "-put", "-f", local, hdfs_path],
             check=True,
@@ -43,13 +44,13 @@ _HDFS_PUT_HELPER = textwrap.dedent("""
 
     try:
         for line in sys.stdin.buffer:
-            os.write(buf_fd, line)
+            buf.write(line)
             if time.monotonic() - last_commit >= 20:
                 commit()
                 last_commit = time.monotonic()
     finally:
-        os.close(buf_fd)
         commit()
+        buf.close()
 """).strip()
 
 
