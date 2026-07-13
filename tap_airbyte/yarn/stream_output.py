@@ -1,12 +1,12 @@
 import json
 import argparse
 
-from main import stream_file
+from tap_airbyte.yarn.streaming import stream_file
 
 
 def main():
     parser = argparse.ArgumentParser(description="Stream a airbyte output file until the service is finished.")
-    parser.add_argument("file_path", type=str, help="Path to the file to stream.")
+    parser.add_argument("file_path", type=str, help="HDFS path of the file to stream.")
     parser.add_argument("--yarn_config", type=str, required=True, help="Yarn configs.")
     parser.add_argument("--app_id", type=str, required=True,
                         help="Yarn application id to wait for.")
