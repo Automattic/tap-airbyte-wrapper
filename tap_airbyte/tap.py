@@ -246,8 +246,6 @@ class TapAirbyte(Tap):
         )
 
     ).to_dict()
-    # Where plain docker runs bind-mount the per-run config dir inside the container.
-    conf_dir: str = "/tmp"
     pipe_status = None
     eof_received = None
     # Airbyte image to run
@@ -299,32 +297,21 @@ class TapAirbyte(Tap):
         """Check if the connector should be run on YARN."""
         return bool(self.config.get("yarn_service_config"))
 
-    @property
-    def tmpdir_base(self) -> t.Optional[str]:
-        """Base directory for per-run scratch dirs. On YARN a plain local
-        tmpdir is enough — files are shipped to the container over HDFS,
-        not through a shared mount."""
-        return None if self.run_on_yarn else self.conf_dir
-
-    @property
-    def container_conf_dir(self) -> str:
-        """Where the connector finds config/catalog/state inside its container:
-        the YARN-localized dir, or the docker bind-mount target otherwise."""
-        return CONTAINER_CONF_DIR if self.run_on_yarn else self.conf_dir
-
     @contextmanager
     def _staged_run(self, **files: t.Any) -> t.Iterator[_StagedRun]:
         """Write the given JSON documents (config=..., catalog=..., state=...)
         into a per-run dir and yield how to reference them from the connector
         command: `run.path("config")` is the path as the connector sees it,
         `run.command_kwargs` are the to_command() arguments for this run."""
-        with TemporaryDirectory(dir=self.tmpdir_base) as host_dir:
+        with TemporaryDirectory() as host_dir:
             for name, document in files.items():
                 with open(f"{host_dir}/{name}.json", "wb") as f:
                     f.write(orjson.dumps(document, default=default))
-            conf_dir = host_dir if self.is_native() else self.container_conf_dir
+            # Native runs read the host dir directly; containers see it at
+            # CONTAINER_CONF_DIR (YARN localization, or a docker bind mount).
+            conf_dir = host_dir if self.is_native() else CONTAINER_CONF_DIR
             docker_args = [] if self.run_on_yarn else [
-                "--rm", "-i", "-v", f"{host_dir}:{self.conf_dir}", *self.docker_mounts,
+                "--rm", "-i", "-v", f"{host_dir}:{CONTAINER_CONF_DIR}", *self.docker_mounts,
             ]
             yield _StagedRun(conf_dir, {"docker_args": docker_args, "runtime_tmp_dir": host_dir})
 
@@ -462,12 +449,12 @@ class TapAirbyte(Tap):
 
     def run_help(self) -> None:
         """Run the help command for the Airbyte connector."""
-        with TemporaryDirectory(dir=self.tmpdir_base) as runtime_tmp_dir:
+        with TemporaryDirectory() as runtime_tmp_dir:
             subprocess.run(self.to_command("--help", runtime_tmp_dir=runtime_tmp_dir), check=True)
 
     def run_spec(self) -> t.Dict[str, t.Any]:
         """Run the spec command for the Airbyte connector."""
-        with TemporaryDirectory(dir=self.tmpdir_base) as runtime_tmp_dir:
+        with TemporaryDirectory() as runtime_tmp_dir:
             proc = subprocess.run(
                 self.to_command("spec", runtime_tmp_dir=runtime_tmp_dir),
                 stdout=subprocess.PIPE,
