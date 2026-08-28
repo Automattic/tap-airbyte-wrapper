@@ -402,7 +402,7 @@ def test_run_yarn_service_uploads_files_and_localizes_them(tmp_path, monkeypatch
 
     service_config = session.post.call_args.kwargs["json"]
     component = service_config["components"][0]
-    files = {f["dest_file"]: f for f in component["files"]}
+    files = {f["dest_file"]: f for f in component["configuration"]["files"]}
     assert set(files) == {f"{CONTAINER_CONF_DIR}/{name}" for name in
                           ("helper.py", "webhdfs.py", "webhdfs.json", "launch.sh", "config.json", "catalog.json")}
     for name in ("webhdfs.json", "config.json"):
@@ -469,7 +469,7 @@ def test_run_yarn_service_uploads_files_the_am_would_mangle(tmp_path, monkeypatc
 
     uploaded = {call.args[1] for call in mock_write.call_args_list}
     assert "/tmp/.airbyte/tmpabc123/catalog.json" in uploaded
-    files = {f["dest_file"]: f for f in session.post.call_args.kwargs["json"]["components"][0]["files"]}
+    files = {f["dest_file"]: f for f in session.post.call_args.kwargs["json"]["components"][0]["configuration"]["files"]}
     assert files[f"{CONTAINER_CONF_DIR}/catalog.json"]["type"] == "STATIC"
 
 
@@ -517,7 +517,7 @@ def test_run_yarn_service_inlines_helper_modules_verbatim(tmp_path, monkeypatch)
 
     assert not mock_write.call_args_list or all(
         not call.args[1].endswith((".py", "launch.sh")) for call in mock_write.call_args_list)
-    files = {f["dest_file"]: f for f in session.post.call_args.kwargs["json"]["components"][0]["files"]}
+    files = {f["dest_file"]: f for f in session.post.call_args.kwargs["json"]["components"][0]["configuration"]["files"]}
     for name, path in (("helper.py", HELPER_PATH), ("webhdfs.py", WEBHDFS_MODULE_PATH)):
         with open(path, "r", encoding="utf-8") as f:
             source = f.read()

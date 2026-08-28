@@ -134,15 +134,15 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
             # The wrapper image's entrypoint is `["/bin/sh", "-c"]`; a bare
             # script path avoids quoting/tokenization issues in docker CMD.
             "launch_command": f"{CONTAINER_CONF_DIR}/launch.sh",
-            # YARN localizes these (from HDFS or rendered from inline
-            # content) and mounts them read-only into the docker container
-            # at their absolute dest_file paths.
-            "files": files_spec,
             "resource": {
               "cpus": 2,
               "memory": "1024"
             },
             "configuration": {
+                # YARN localizes these (from HDFS or rendered from inline
+                # content) and mounts them read-only into the docker
+                # container at their absolute dest_file paths.
+                "files": files_spec,
                 "env": {
                     "YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true",
                 },
