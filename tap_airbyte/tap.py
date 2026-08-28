@@ -239,7 +239,8 @@ class TapAirbyte(Tap):
         )
 
     ).to_dict()
-    airbyte_mount_dir: str = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
+    # Where plain docker runs bind-mount the per-run config dir inside the container.
+    conf_dir: str = "/tmp"
     pipe_status = None
     eof_received = None
     # Airbyte image to run
@@ -296,7 +297,13 @@ class TapAirbyte(Tap):
         """Base directory for per-run scratch dirs. On YARN a plain local
         tmpdir is enough — files are shipped to the container over HDFS,
         not through a shared mount."""
-        return None if self.run_on_yarn else self.airbyte_mount_dir
+        return None if self.run_on_yarn else self.conf_dir
+
+    @property
+    def container_conf_dir(self) -> str:
+        """Where the connector finds config/catalog/state inside its container:
+        the YARN-localized dir, or the docker bind-mount target otherwise."""
+        return CONTAINER_CONF_DIR if self.run_on_yarn else self.conf_dir
 
     @property
     def native_venv_path(self) -> Path:
@@ -392,13 +399,7 @@ class TapAirbyte(Tap):
         """
         Run the Airbyte connector on YARN and return the command to watch the output file.
         """
-        # Config paths in the command are rewritten to CONTAINER_CONF_DIR,
-        # where YARN localizes the files uploaded to HDFS.
-        app_id, hdfs_output_path = run_yarn_service(
-            self.config,
-            ' '.join(airbyte_cmd).replace(self.airbyte_mount_dir, CONTAINER_CONF_DIR),
-            runtime_tmp_dir,
-        )
+        app_id, hdfs_output_path = run_yarn_service(self.config, ' '.join(airbyte_cmd), runtime_tmp_dir)
         self.logger.debug("Waiting for the output file %s to be created.", hdfs_output_path)
         wait_for_file(hdfs_output_path,
                       yarn_config=self.config["yarn_service_config"],
@@ -500,7 +501,7 @@ class TapAirbyte(Tap):
         with TemporaryDirectory(dir=self.tmpdir_base) as host_tmpdir:
             with open(f"{host_tmpdir}/config.json", "wb") as f:
                 f.write(orjson.dumps(self.config.get("airbyte_config", {})))
-            runtime_conf_dir = host_tmpdir if self.is_native() else self.airbyte_mount_dir
+            runtime_conf_dir = host_tmpdir if self.is_native() else self.container_conf_dir
             proc = subprocess.run(
                 self.to_command(
                     "check",
@@ -510,7 +511,7 @@ class TapAirbyte(Tap):
                         "--rm",
                         "-i",
                         "-v",
-                        f"{host_tmpdir}:{self.airbyte_mount_dir}",
+                        f"{host_tmpdir}:{self.conf_dir}",
                         *self.docker_mounts,
                     ],
                     runtime_tmp_dir=host_tmpdir
@@ -575,7 +576,7 @@ class TapAirbyte(Tap):
                     self.logger.debug("Using state: %s", state_dict)
                     state.write(orjson.dumps(state_dict, default=default))
 
-            runtime_conf_dir = host_tmpdir if self.is_native() else self.airbyte_mount_dir
+            runtime_conf_dir = host_tmpdir if self.is_native() else self.container_conf_dir
             proc = subprocess.Popen(
                 self.to_command(
                     "read",
@@ -588,7 +589,7 @@ class TapAirbyte(Tap):
                         "--rm",
                         "-i",
                         "-v",
-                        f"{host_tmpdir}:{self.airbyte_mount_dir}",
+                        f"{host_tmpdir}:{self.conf_dir}",
                         *self.docker_mounts,
                     ],
                     runtime_tmp_dir=host_tmpdir
@@ -693,7 +694,7 @@ class TapAirbyte(Tap):
         with TemporaryDirectory(dir=self.tmpdir_base) as host_tmpdir:
             with open(f"{host_tmpdir}/config.json", "wb") as f:
                 f.write(orjson.dumps(self.config.get("airbyte_config", {})))
-            runtime_conf_dir = host_tmpdir if self.is_native() else self.airbyte_mount_dir
+            runtime_conf_dir = host_tmpdir if self.is_native() else self.container_conf_dir
             proc = subprocess.run(
                 self.to_command(
                     "discover",
@@ -703,7 +704,7 @@ class TapAirbyte(Tap):
                         "--rm",
                         "-i",
                         "-v",
-                        f"{host_tmpdir}:{self.airbyte_mount_dir}",
+                        f"{host_tmpdir}:{self.conf_dir}",
                         *self.docker_mounts,
                     ],
                     runtime_tmp_dir=host_tmpdir
