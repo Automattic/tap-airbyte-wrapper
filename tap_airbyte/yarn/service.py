@@ -45,6 +45,8 @@ WEBHDFS_CREDENTIALS_FILE = "webhdfs.json"
 #    and catalogs, never for secrets.
 SECRET_FILES = {"config.json", "state.json", WEBHDFS_CREDENTIALS_FILE}
 
+PROXY_ENV_VARS = ("http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
+
 
 def _inline_safe(content: str) -> bool:
     """The AM substitutes `${TOKEN}` / `{{key}}` in TEMPLATE content; refuse
@@ -145,6 +147,9 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
                 "files": files_spec,
                 "env": {
                     "YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true",
+                    # On the host network the connector needs the same egress
+                    # proxy this process uses to reach its API.
+                    **{name: os.environ[name] for name in PROXY_ENV_VARS if os.environ.get(name)},
                 },
                 "properties": {
                     "yarn.service.default-readiness-check.enabled": "false",

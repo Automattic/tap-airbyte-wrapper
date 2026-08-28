@@ -590,3 +590,38 @@ def test_delete_credential_files_targets_secrets_only():
         "/tmp/.airbyte/run1/state.json",
         "/tmp/.airbyte/run1/webhdfs.json",
     ]
+
+
+def _submit_component_conf(tmp_path, monkeypatch):
+    monkeypatch.setenv("HDFS_PATH", "/tmp/.airbyte")
+    runtime_tmp_dir = tmp_path / "tmpabc123"
+    runtime_tmp_dir.mkdir()
+    config = {"yarn_service_config": YARN_CONFIG, "airbyte_spec": {"image": "airbyte/source-slack"}}
+    session = MagicMock()
+    session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
+    with patch("tap_airbyte.yarn.service.hdfs_write_file"), \
+            patch("tap_airbyte.yarn.service.hdfs_mkdirs"), \
+            patch("tap_airbyte.yarn.service.create_session", return_value=session), \
+            patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
+        run_yarn_service(config, "read", str(runtime_tmp_dir))
+    return session.post.call_args.kwargs["json"]["components"][0]["configuration"]
+
+
+def test_run_yarn_service_forwards_proxy_env(tmp_path, monkeypatch):
+    for name in ("http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("https_proxy", "http://egress.example.com:20443")
+    monkeypatch.setenv("no_proxy", "localhost,gateway.example.com")
+    env = _submit_component_conf(tmp_path, monkeypatch)["env"]
+    assert env == {
+        "YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true",
+        "https_proxy": "http://egress.example.com:20443",
+        "no_proxy": "localhost,gateway.example.com",
+    }
+
+
+def test_run_yarn_service_no_proxy_env_when_unset(tmp_path, monkeypatch):
+    for name in ("http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    env = _submit_component_conf(tmp_path, monkeypatch)["env"]
+    assert env == {"YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true"}
