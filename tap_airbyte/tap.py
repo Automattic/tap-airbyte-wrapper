@@ -40,7 +40,7 @@ from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
 
 from tap_airbyte.yarn.service import CONTAINER_CONF_DIR, run_yarn_service, kill_yarn_app, destroy_yarn_service
-from tap_airbyte.yarn.streaming import wait_for_file
+from tap_airbyte.yarn.streaming import delete_credential_files, wait_for_file
 
 # Sentinel value for broken pipe
 PIPE_CLOSED = object()
@@ -608,6 +608,7 @@ class TapAirbyte(Tap):
                         kill_yarn_app(self.config["yarn_service_config"], app_id)
                         # The watcher is about to be killed, so its own cleanup won't run.
                         destroy_yarn_service(self.config["yarn_service_config"], app_id)
+                        delete_credential_files(self.config["yarn_service_config"], str(proc.args[-1]))
                     proc.kill()
                     self.logger.warning("Airbyte process terminated before EOF message received.")
                 self.logger.debug("Waiting for Airbyte process to terminate.")

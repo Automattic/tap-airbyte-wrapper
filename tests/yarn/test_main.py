@@ -579,3 +579,14 @@ def test_run_yarn_service_uses_host_docker_network(tmp_path, monkeypatch):
     conf = session.post.call_args.kwargs["json"]["components"][0]["configuration"]
     assert conf["properties"]["docker.network"] == "host"
     assert conf["env"] == {"YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true"}
+
+
+def test_delete_credential_files_targets_secrets_only():
+    from tap_airbyte.yarn.streaming import delete_credential_files
+    with patch("tap_airbyte.yarn.streaming.hdfs_delete") as mock_delete:
+        delete_credential_files(YARN_CONFIG, "/tmp/.airbyte/run1/stdout-read")
+    assert [c.args[1] for c in mock_delete.call_args_list] == [
+        "/tmp/.airbyte/run1/config.json",
+        "/tmp/.airbyte/run1/state.json",
+        "/tmp/.airbyte/run1/webhdfs.json",
+    ]

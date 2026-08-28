@@ -64,6 +64,15 @@ def read_file(yarn_config: dict, file_path: str, position: int) -> int:
     return position + len(complete_lines)
 
 
+def delete_credential_files(yarn_config: dict, file_path: str) -> None:
+    """Drop the secret-bearing files from the per-run dir of the given stdout
+    file (best effort). Called on any failure path, including the tap's own
+    kill path where this watcher process gets terminated."""
+    hdfs_runtime_dir = posixpath.dirname(file_path)
+    for name in CREDENTIAL_FILES:
+        hdfs_delete(yarn_config, posixpath.join(hdfs_runtime_dir, name))
+
+
 def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     """
     Stream an HDFS file line by line until the YARN application finishes,
@@ -80,8 +89,7 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     except BaseException:
         # Keep the stdout file around for debugging a failed run, but drop
         # the files that can hold credentials.
-        for name in CREDENTIAL_FILES:
-            hdfs_delete(yarn_config, posixpath.join(hdfs_runtime_dir, name))
+        delete_credential_files(yarn_config, file_path)
         raise
     else:
         hdfs_delete(yarn_config, hdfs_runtime_dir, recursive=True)
