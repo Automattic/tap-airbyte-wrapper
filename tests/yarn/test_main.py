@@ -1,4 +1,6 @@
 import json
+import logging
+import typing as t
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -361,175 +363,136 @@ def test_destroy_yarn_service_is_best_effort(caplog):
 # run_yarn_service
 # ---------------------------------------------------------------------------
 
-def test_run_yarn_service_uploads_files_and_localizes_them(tmp_path, monkeypatch):
-    monkeypatch.setenv("HDFS_PATH", "/tmp/.airbyte")
-    runtime_tmp_dir = tmp_path / "tmpabc123"
-    runtime_tmp_dir.mkdir()
-    (runtime_tmp_dir / "config.json").write_bytes(b"{}")
-    (runtime_tmp_dir / "catalog.json").write_bytes(b"{}")
+class Submitted(t.NamedTuple):
+    app_id: str
+    hdfs_output_path: str
+    spec: dict
+    uploads: dict      # hdfs path -> content uploaded over WebHDFS
+    mkdirs: MagicMock
 
-    config = {
-        "yarn_service_config": YARN_CONFIG,
-        "airbyte_spec": {"image": "airbyte/source-slack", "tag": "1.0"},
-    }
-    session = MagicMock()
-    session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
+    @property
+    def component(self):
+        return self.spec["components"][0]
+
+    @property
+    def files(self):
+        """Localized files by dest_file."""
+        return {f["dest_file"]: f for f in self.component["configuration"]["files"]}
+
+
+@pytest.fixture
+def submit_service(tmp_path, monkeypatch):
+    """Run run_yarn_service with WebHDFS and the RM mocked out."""
+
+    def _submit(command="read", files=None, yarn_config=None, hdfs_path="/tmp/.airbyte", tag=None):
+        if hdfs_path is None:
+            monkeypatch.delenv("HDFS_PATH", raising=False)
+        else:
+            monkeypatch.setenv("HDFS_PATH", hdfs_path)
+        runtime_tmp_dir = tmp_path / "tmpabc123"
+        runtime_tmp_dir.mkdir(exist_ok=True)
+        for name, content in (files or {}).items():
+            (runtime_tmp_dir / name).write_text(content)
+        config = {
+            "yarn_service_config": yarn_config or YARN_CONFIG,
+            "airbyte_spec": {"image": "airbyte/source-slack", **({"tag": tag} if tag else {})},
+        }
+        session = MagicMock()
+        session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
+        with patch("tap_airbyte.yarn.service.hdfs_write_file") as mock_write, \
+                patch("tap_airbyte.yarn.service.hdfs_mkdirs") as mock_mkdirs, \
+                patch("tap_airbyte.yarn.service.create_session", return_value=session), \
+                patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
+            app_id, hdfs_output_path = run_yarn_service(config, command, str(runtime_tmp_dir))
+        return Submitted(app_id, hdfs_output_path, session.post.call_args.kwargs["json"],
+                         {c.args[1]: c.args[2] for c in mock_write.call_args_list}, mock_mkdirs)
+
+    return _submit
+
+
+def test_run_yarn_service_uploads_files_and_localizes_them(submit_service):
     command = f"read --config {CONTAINER_CONF_DIR}/config.json --catalog {CONTAINER_CONF_DIR}/catalog.json"
+    run = submit_service(command, files={"config.json": "{}", "catalog.json": "{}"}, tag="1.0")
 
-    with patch("tap_airbyte.yarn.service.hdfs_write_file") as mock_write, \
-            patch("tap_airbyte.yarn.service.hdfs_mkdirs") as mock_mkdirs, \
-            patch("tap_airbyte.yarn.service.create_session", return_value=session), \
-            patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
-        app_id, hdfs_output_path = run_yarn_service(config, command, str(runtime_tmp_dir))
-
-    assert app_id == "app_1"
-    assert hdfs_output_path == "/tmp/.airbyte/tmpabc123/stdout-read"
+    assert run.app_id == "app_1"
+    assert run.hdfs_output_path == "/tmp/.airbyte/tmpabc123/stdout-read"
     # Run dir created owner-only before any upload.
-    mock_mkdirs.assert_called_once_with(YARN_CONFIG, "/tmp/.airbyte/tmpabc123")
+    run.mkdirs.assert_called_once_with(YARN_CONFIG, "/tmp/.airbyte/tmpabc123")
 
     # Only the secret-bearing files are uploaded over WebHDFS (600) and
     # localized as STATIC; the rest is inlined in the spec as TEMPLATE
     # content, which the AM logs and keeps a copy of.
-    uploads = {call.args[1]: call.args[2] for call in mock_write.call_args_list}
-    assert set(uploads) == {
-        "/tmp/.airbyte/tmpabc123/webhdfs.json",
-        "/tmp/.airbyte/tmpabc123/config.json",
-    }
+    assert set(run.uploads) == {"/tmp/.airbyte/tmpabc123/webhdfs.json", "/tmp/.airbyte/tmpabc123/config.json"}
     # Only the Basic token reaches the container, never username/password.
-    creds = json.loads(uploads["/tmp/.airbyte/tmpabc123/webhdfs.json"])
+    creds = json.loads(run.uploads["/tmp/.airbyte/tmpabc123/webhdfs.json"])
     assert creds["authorization"] == "Basic dTpw"
     assert "password" not in creds
 
-    service_config = session.post.call_args.kwargs["json"]
-    component = service_config["components"][0]
-    files = {f["dest_file"]: f for f in component["configuration"]["files"]}
-    assert set(files) == {f"{CONTAINER_CONF_DIR}/{name}" for name in
-                          ("helper.py", "webhdfs.py", "webhdfs.json", "launch.sh", "config.json", "catalog.json")}
+    assert set(run.files) == {f"{CONTAINER_CONF_DIR}/{name}" for name in
+                              ("helper.py", "webhdfs.py", "webhdfs.json", "launch.sh", "config.json", "catalog.json")}
     for name in ("webhdfs.json", "config.json"):
-        assert files[f"{CONTAINER_CONF_DIR}/{name}"] == {
+        assert run.files[f"{CONTAINER_CONF_DIR}/{name}"] == {
             "type": "STATIC", "dest_file": f"{CONTAINER_CONF_DIR}/{name}",
             "src_file": f"/tmp/.airbyte/tmpabc123/{name}"}
     for name in ("helper.py", "webhdfs.py", "launch.sh", "catalog.json"):
-        entry = files[f"{CONTAINER_CONF_DIR}/{name}"]
+        entry = run.files[f"{CONTAINER_CONF_DIR}/{name}"]
         assert entry["type"] == "TEMPLATE" and "src_file" not in entry
         assert set(entry["properties"]) == {"content"}
-    assert files[f"{CONTAINER_CONF_DIR}/catalog.json"]["properties"]["content"] == "{}"
-    launch_script = files[f"{CONTAINER_CONF_DIR}/launch.sh"]["properties"]["content"]
+    assert run.files[f"{CONTAINER_CONF_DIR}/catalog.json"]["properties"]["content"] == "{}"
+    launch_script = run.files[f"{CONTAINER_CONF_DIR}/launch.sh"]["properties"]["content"]
     assert (f"python -u {CONTAINER_CONF_DIR}/helper.py /tmp/.airbyte/tmpabc123/stdout-read "
             f"{CONTAINER_CONF_DIR}/webhdfs.json") in launch_script
     assert f"python -u main.py {command} >/tmp/airbyte_pipe" in launch_script
     # Nothing secret in the spec (the AM logs it).
-    assert "Basic dTpw" not in json.dumps(service_config)
-    assert component["launch_command"] == f"{CONTAINER_CONF_DIR}/launch.sh"
+    assert "Basic dTpw" not in json.dumps(run.spec)
+    assert run.component["launch_command"] == f"{CONTAINER_CONF_DIR}/launch.sh"
     # No shared-mount plumbing left in the spec.
-    assert "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS" not in component["configuration"]["env"]
+    assert "YARN_CONTAINER_RUNTIME_DOCKER_MOUNTS" not in run.component["configuration"]["env"]
 
 
-def test_run_yarn_service_never_logs_spec_or_secrets(tmp_path, monkeypatch, caplog):
+def test_run_yarn_service_never_logs_spec_or_secrets(submit_service, caplog):
     """The spec carries inline file content; secrets are in the uploads.
     Neither may show up in our logs, even at DEBUG."""
-    import logging
     caplog.set_level(logging.DEBUG)
-    monkeypatch.setenv("HDFS_PATH", "/tmp/.airbyte")
-    runtime_tmp_dir = tmp_path / "tmpabc123"
-    runtime_tmp_dir.mkdir()
-    (runtime_tmp_dir / "config.json").write_text('{"api_token": "SUPERSECRET"}')
-    (runtime_tmp_dir / "catalog.json").write_text('{"streams": ["CATALOGMARK"]}')
-    config = {"yarn_service_config": YARN_CONFIG, "airbyte_spec": {"image": "airbyte/source-slack"}}
-    session = MagicMock()
-    session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
-
-    with patch("tap_airbyte.yarn.service.hdfs_write_file"), \
-            patch("tap_airbyte.yarn.service.hdfs_mkdirs"), \
-            patch("tap_airbyte.yarn.service.create_session", return_value=session), \
-            patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
-        run_yarn_service(config, "read", str(runtime_tmp_dir))
-
+    submit_service(files={"config.json": '{"api_token": "SUPERSECRET"}',
+                          "catalog.json": '{"streams": ["CATALOGMARK"]}'})
     assert "SUPERSECRET" not in caplog.text
     assert "CATALOGMARK" not in caplog.text
     assert "dTpw" not in caplog.text
 
 
-def test_run_yarn_service_uploads_files_the_am_would_mangle(tmp_path, monkeypatch):
+def test_run_yarn_service_uploads_files_the_am_would_mangle(submit_service):
     """TEMPLATE content goes through the AM's ${TOKEN} / {{key}} substitution;
     a non-secret file containing such markers must be uploaded as STATIC instead."""
-    monkeypatch.setenv("HDFS_PATH", "/tmp/.airbyte")
-    runtime_tmp_dir = tmp_path / "tmpabc123"
-    runtime_tmp_dir.mkdir()
-    (runtime_tmp_dir / "catalog.json").write_text('{"name": "${USER}-stream"}')
-    config = {"yarn_service_config": YARN_CONFIG, "airbyte_spec": {"image": "airbyte/source-slack"}}
-    session = MagicMock()
-    session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
-
-    with patch("tap_airbyte.yarn.service.hdfs_write_file") as mock_write, \
-            patch("tap_airbyte.yarn.service.hdfs_mkdirs"), \
-            patch("tap_airbyte.yarn.service.create_session", return_value=session), \
-            patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
-        run_yarn_service(config, "read", str(runtime_tmp_dir))
-
-    uploaded = {call.args[1] for call in mock_write.call_args_list}
-    assert "/tmp/.airbyte/tmpabc123/catalog.json" in uploaded
-    files = {f["dest_file"]: f for f in session.post.call_args.kwargs["json"]["components"][0]["configuration"]["files"]}
-    assert files[f"{CONTAINER_CONF_DIR}/catalog.json"]["type"] == "STATIC"
+    run = submit_service(files={"catalog.json": '{"name": "${USER}-stream"}'})
+    assert "/tmp/.airbyte/tmpabc123/catalog.json" in run.uploads
+    assert run.files[f"{CONTAINER_CONF_DIR}/catalog.json"]["type"] == "STATIC"
 
 
-def test_run_yarn_service_defaults_hdfs_base_to_user_home(tmp_path, monkeypatch):
+def test_run_yarn_service_defaults_hdfs_base_to_user_home(submit_service):
     """Without HDFS_PATH, stage under the submitting user's HDFS home
     rather than a global /tmp path."""
-    monkeypatch.delenv("HDFS_PATH", raising=False)
-    runtime_tmp_dir = tmp_path / "tmpabc123"
-    runtime_tmp_dir.mkdir()
-
-    config = {
-        "yarn_service_config": YARN_CONFIG,
-        "airbyte_spec": {"image": "airbyte/source-slack"},
-    }
-    session = MagicMock()
-    session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
-
-    with patch("tap_airbyte.yarn.service.hdfs_write_file"), \
-            patch("tap_airbyte.yarn.service.hdfs_mkdirs"), \
-            patch("tap_airbyte.yarn.service.create_session", return_value=session), \
-            patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
-        _, hdfs_output_path = run_yarn_service(config, "read", str(runtime_tmp_dir))
-
-    assert hdfs_output_path == "/user/u/.airbyte/tmpabc123/stdout-read"
+    assert submit_service(hdfs_path=None).hdfs_output_path == "/user/u/.airbyte/tmpabc123/stdout-read"
 
 
-def test_run_yarn_service_inlines_helper_modules_verbatim(tmp_path, monkeypatch):
+def test_run_yarn_service_inlines_helper_modules_verbatim(submit_service):
     """helper.py / webhdfs.py inlined in the spec must be the modules shipped
     in the package, byte for byte, and free of template markers."""
-    monkeypatch.setenv("HDFS_PATH", "/tmp/.airbyte")
-    runtime_tmp_dir = tmp_path / "tmpabc123"
-    runtime_tmp_dir.mkdir()
-    config = {
-        "yarn_service_config": YARN_CONFIG,
-        "airbyte_spec": {"image": "airbyte/source-slack"},
-    }
-    session = MagicMock()
-    session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
-
-    with patch("tap_airbyte.yarn.service.hdfs_write_file") as mock_write, \
-            patch("tap_airbyte.yarn.service.hdfs_mkdirs"), \
-            patch("tap_airbyte.yarn.service.create_session", return_value=session), \
-            patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
-        run_yarn_service(config, "read", str(runtime_tmp_dir))
-
-    assert not mock_write.call_args_list or all(
-        not call.args[1].endswith((".py", "launch.sh")) for call in mock_write.call_args_list)
-    files = {f["dest_file"]: f for f in session.post.call_args.kwargs["json"]["components"][0]["configuration"]["files"]}
+    run = submit_service()
+    assert not any(path.endswith((".py", "launch.sh")) for path in run.uploads)
     for name, path in (("helper.py", HELPER_PATH), ("webhdfs.py", WEBHDFS_MODULE_PATH)):
         with open(path, "r", encoding="utf-8") as f:
             source = f.read()
-        entry = files[f"{CONTAINER_CONF_DIR}/{name}"]
+        entry = run.files[f"{CONTAINER_CONF_DIR}/{name}"]
         assert entry["type"] == "TEMPLATE"
         assert entry["properties"]["content"] == source
         # Would be silently rewritten by the AM's substitution pass.
         assert "${" not in source and "{{" not in source
     # The in-container module must not depend on the package or third parties.
-    webhdfs_src = files[f"{CONTAINER_CONF_DIR}/webhdfs.py"]["properties"]["content"]
+    webhdfs_src = run.files[f"{CONTAINER_CONF_DIR}/webhdfs.py"]["properties"]["content"]
     assert "import requests" not in webhdfs_src
     assert "from tap_airbyte" not in webhdfs_src
+
 
 # ---------------------------------------------------------------------------
 # yarn_config with declared-but-unset keys (meltano passes them as None)
@@ -542,43 +505,40 @@ def test_create_session_tolerates_none_extra_headers():
     assert session.auth.username == "u"
 
 
-def test_run_yarn_service_tolerates_none_optional_keys(tmp_path, monkeypatch):
-    monkeypatch.setenv("HDFS_PATH", "/tmp/.airbyte")
-    runtime_tmp_dir = tmp_path / "tmpabc123"
-    runtime_tmp_dir.mkdir()
-    config = {
-        "yarn_service_config": {**YARN_CONFIG, "extra_headers": None, "queue": None,
-                                "timeout": None, "webhdfs_base_url": None},
-        "airbyte_spec": {"image": "airbyte/source-slack"},
-    }
-    session = MagicMock()
-    session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
-    with patch("tap_airbyte.yarn.service.hdfs_write_file") as mock_write, \
-            patch("tap_airbyte.yarn.service.hdfs_mkdirs"), \
-            patch("tap_airbyte.yarn.service.create_session", return_value=session), \
-            patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
-        run_yarn_service(config, "read", str(runtime_tmp_dir))
-    assert session.post.call_args.kwargs["json"]["queue"] == "default"
-    creds = json.loads(next(c.args[2] for c in mock_write.call_args_list if c.args[1].endswith("webhdfs.json")))
+def test_run_yarn_service_tolerates_none_optional_keys(submit_service):
+    run = submit_service(yarn_config={**YARN_CONFIG, "extra_headers": None, "queue": None,
+                                      "timeout": None, "webhdfs_base_url": None})
+    assert run.spec["queue"] == "default"
+    creds = json.loads(run.uploads["/tmp/.airbyte/tmpabc123/webhdfs.json"])
     assert creds["extra_headers"] == {}
     assert creds["base_url"] == "https://gateway.example.com"  # webhdfs_base_url None -> base_url
 
 
-def test_run_yarn_service_uses_host_docker_network(tmp_path, monkeypatch):
-    monkeypatch.setenv("HDFS_PATH", "/tmp/.airbyte")
-    runtime_tmp_dir = tmp_path / "tmpabc123"
-    runtime_tmp_dir.mkdir()
-    config = {"yarn_service_config": YARN_CONFIG, "airbyte_spec": {"image": "airbyte/source-slack"}}
-    session = MagicMock()
-    session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
-    with patch("tap_airbyte.yarn.service.hdfs_write_file"), \
-            patch("tap_airbyte.yarn.service.hdfs_mkdirs"), \
-            patch("tap_airbyte.yarn.service.create_session", return_value=session), \
-            patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
-        run_yarn_service(config, "read", str(runtime_tmp_dir))
-    conf = session.post.call_args.kwargs["json"]["components"][0]["configuration"]
+# ---------------------------------------------------------------------------
+# Container network + env
+# ---------------------------------------------------------------------------
+
+PROXY_VARS = ("http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
+
+
+def test_run_yarn_service_uses_host_docker_network(submit_service, monkeypatch):
+    for name in PROXY_VARS:
+        monkeypatch.delenv(name, raising=False)
+    conf = submit_service().component["configuration"]
     assert conf["properties"]["docker.network"] == "host"
     assert conf["env"] == {"YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true"}
+
+
+def test_run_yarn_service_forwards_proxy_env(submit_service, monkeypatch):
+    for name in PROXY_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("https_proxy", "http://egress.example.com:20443")
+    monkeypatch.setenv("no_proxy", "localhost,gateway.example.com")
+    assert submit_service().component["configuration"]["env"] == {
+        "YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true",
+        "https_proxy": "http://egress.example.com:20443",
+        "no_proxy": "localhost,gateway.example.com",
+    }
 
 
 def test_delete_credential_files_targets_secrets_only():
@@ -590,38 +550,3 @@ def test_delete_credential_files_targets_secrets_only():
         "/tmp/.airbyte/run1/state.json",
         "/tmp/.airbyte/run1/webhdfs.json",
     ]
-
-
-def _submit_component_conf(tmp_path, monkeypatch):
-    monkeypatch.setenv("HDFS_PATH", "/tmp/.airbyte")
-    runtime_tmp_dir = tmp_path / "tmpabc123"
-    runtime_tmp_dir.mkdir()
-    config = {"yarn_service_config": YARN_CONFIG, "airbyte_spec": {"image": "airbyte/source-slack"}}
-    session = MagicMock()
-    session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
-    with patch("tap_airbyte.yarn.service.hdfs_write_file"), \
-            patch("tap_airbyte.yarn.service.hdfs_mkdirs"), \
-            patch("tap_airbyte.yarn.service.create_session", return_value=session), \
-            patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
-        run_yarn_service(config, "read", str(runtime_tmp_dir))
-    return session.post.call_args.kwargs["json"]["components"][0]["configuration"]
-
-
-def test_run_yarn_service_forwards_proxy_env(tmp_path, monkeypatch):
-    for name in ("http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("https_proxy", "http://egress.example.com:20443")
-    monkeypatch.setenv("no_proxy", "localhost,gateway.example.com")
-    env = _submit_component_conf(tmp_path, monkeypatch)["env"]
-    assert env == {
-        "YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true",
-        "https_proxy": "http://egress.example.com:20443",
-        "no_proxy": "localhost,gateway.example.com",
-    }
-
-
-def test_run_yarn_service_no_proxy_env_when_unset(tmp_path, monkeypatch):
-    for name in ("http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
-        monkeypatch.delenv(name, raising=False)
-    env = _submit_component_conf(tmp_path, monkeypatch)["env"]
-    assert env == {"YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true"}
