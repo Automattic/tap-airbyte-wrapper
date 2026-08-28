@@ -150,7 +150,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
                     "yarn.service.default-readiness-check.enabled": "false",
                     "yarn.service.container-state-report-as-service-state": "true",
                     "dns.check.enabled": "false",
-                    "docker.network": "bridge"
+                    "docker.network": "host"
                 }
             }
           }

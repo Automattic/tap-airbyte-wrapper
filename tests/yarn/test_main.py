@@ -562,3 +562,20 @@ def test_run_yarn_service_tolerates_none_optional_keys(tmp_path, monkeypatch):
     creds = json.loads(next(c.args[2] for c in mock_write.call_args_list if c.args[1].endswith("webhdfs.json")))
     assert creds["extra_headers"] == {}
     assert creds["base_url"] == "https://gateway.example.com"  # webhdfs_base_url None -> base_url
+
+
+def test_run_yarn_service_uses_host_docker_network(tmp_path, monkeypatch):
+    monkeypatch.setenv("HDFS_PATH", "/tmp/.airbyte")
+    runtime_tmp_dir = tmp_path / "tmpabc123"
+    runtime_tmp_dir.mkdir()
+    config = {"yarn_service_config": YARN_CONFIG, "airbyte_spec": {"image": "airbyte/source-slack"}}
+    session = MagicMock()
+    session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
+    with patch("tap_airbyte.yarn.service.hdfs_write_file"), \
+            patch("tap_airbyte.yarn.service.hdfs_mkdirs"), \
+            patch("tap_airbyte.yarn.service.create_session", return_value=session), \
+            patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
+        run_yarn_service(config, "read", str(runtime_tmp_dir))
+    conf = session.post.call_args.kwargs["json"]["components"][0]["configuration"]
+    assert conf["properties"]["docker.network"] == "host"
+    assert conf["env"] == {"YARN_CONTAINER_RUNTIME_DOCKER_RUN_OVERRIDE_DISABLE": "true"}
