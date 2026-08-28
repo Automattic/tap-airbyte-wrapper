@@ -11,7 +11,7 @@ import hashlib
 from tenacity import retry, stop_after_delay, wait_fixed
 
 from tap_airbyte.yarn.session import YarnConfig, YarnApplicationInfo, create_session
-from tap_airbyte.yarn.webhdfs import hdfs_mkdirs, hdfs_write_file
+from tap_airbyte.yarn.webhdfs import WebHdfsClient, hdfs_mkdirs, hdfs_write_file
 
 logger = logging.getLogger(__name__)
 
@@ -23,36 +23,33 @@ YARN_APP_TERMINAL_STATES = {'FINISHED'} | YARN_APP_FAILED_STATES
 # files) inside the Airbyte container.
 CONTAINER_CONF_DIR = "/tmp/airbyte"
 
-# Runs inside the Airbyte container: buffers main.py's stdout on local disk
-# and uploads it to HDFS (argv[1]) via `hdfs dfs -put -f` every 20s (each
-# invocation spins up a JVM, ~1-3s). The buffer is append-only, so the
-# committed file's prefix is stable and byte offsets stay valid across
-# commits; the Meltano side reads it with WebHDFS offset reads (`read_file`).
-_HDFS_PUT_HELPER = textwrap.dedent("""
-    import sys, time, subprocess
-    hdfs_path = sys.argv[1]
-    local = "/tmp/airbyte_buf"
-    buf = open(local, "wb")
-    last_commit = time.monotonic()
+# Run inside the Airbyte container: helper.py relays main.py's stdout to HDFS
+# with incremental WebHDFS CREATE/APPEND commits, using the same webhdfs.py
+# client as this side. Both are shipped verbatim (stdlib-only) as inline
+# TEMPLATE content in the service spec; see the module docstring in helper.py.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+HELPER_PATH = os.path.join(_HERE, "helper.py")
+WEBHDFS_MODULE_PATH = os.path.join(_HERE, "webhdfs.py")
+# Gateway URL + auth token for the helper. Uploaded 600 like config.json and
+# removed with it on failure (see streaming.CREDENTIAL_FILES).
+WEBHDFS_CREDENTIALS_FILE = "webhdfs.json"
 
-    def commit():
-        buf.flush()
-        subprocess.run(
-            ["hdfs", "dfs", "-D", "fs.permissions.umask-mode=077",
-             "-put", "-f", local, hdfs_path],
-            check=True,
-        )
+# How each file reaches the container:
+#  - secrets (connector config, state cursors, gateway token): uploaded to the
+#    per-run HDFS dir as 600 and listed as STATIC — the AM localizes them
+#    without ever logging or copying their content.
+#  - everything else: inlined in the service spec as TEMPLATE `content`, which
+#    the AM renders itself. Cheaper (no upload), but the AM logs the rendered
+#    ConfigFile (properties included) at INFO and keeps a copy under
+#    ~/.yarn/services/<name>/ until the service is destroyed — fine for code
+#    and catalogs, never for secrets.
+SECRET_FILES = {"config.json", "state.json", WEBHDFS_CREDENTIALS_FILE}
 
-    try:
-        for line in sys.stdin.buffer:
-            buf.write(line)
-            if time.monotonic() - last_commit >= 20:
-                commit()
-                last_commit = time.monotonic()
-    finally:
-        commit()
-        buf.close()
-""").strip()
+
+def _inline_safe(content: str) -> bool:
+    """The AM substitutes `${TOKEN}` / `{{key}}` in TEMPLATE content; refuse
+    to inline anything that could be mangled and upload it instead."""
+    return "${" not in content and "{{" not in content
 
 
 def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: str) -> tuple[str, str]:
@@ -81,29 +78,44 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     # the container's stderr so YARN log aggregation captures it.
     launch_script = textwrap.dedent(f"""\
         #!/bin/sh
-        mkfifo /tmp/airbyte_pipe
-        # Helper drains the FIFO and uploads to HDFS every 20s.
-        python -u {CONTAINER_CONF_DIR}/helper.py {hdfs_output_path} </tmp/airbyte_pipe &
+        mkfifo /tmp/airbyte_pipe || exit 1
+        # Helper drains the FIFO and appends new bytes to HDFS every 20s.
+        python -u {CONTAINER_CONF_DIR}/helper.py {hdfs_output_path} {CONTAINER_CONF_DIR}/{WEBHDFS_CREDENTIALS_FILE} </tmp/airbyte_pipe &
         HELPER_PID=$!
         python -u main.py {command} >/tmp/airbyte_pipe
-        # Exit with main.py's status so YARN reflects Airbyte's success/fail.
         EC=$?
         wait $HELPER_PID
-        exit $EC
+        HELPER_EC=$?
+        # main.py's status wins so YARN reflects Airbyte's success/fail; otherwise
+        # a helper that could not land the final commit (lost stdout) fails the run.
+        [ "$EC" -ne 0 ] && exit $EC
+        exit $HELPER_EC
     """)
-    # Owner-only dir; the uploaded files default to 600 in hdfs_write_file.
-    hdfs_mkdirs(yarn_config, hdfs_runtime_dir)
-    hdfs_write_file(yarn_config, posixpath.join(hdfs_runtime_dir, "helper.py"), _HDFS_PUT_HELPER + "\n")
-    hdfs_write_file(yarn_config, posixpath.join(hdfs_runtime_dir, "launch.sh"), launch_script)
-    localized_files = ["helper.py", "launch.sh"]
-    # Ship whatever the tap staged locally (config/catalog/state.json).
+    container_files = {"launch.sh": launch_script,
+                       WEBHDFS_CREDENTIALS_FILE: WebHdfsClient.from_yarn_config(yarn_config).credentials_json()}
+    for name, path in (("helper.py", HELPER_PATH), ("webhdfs.py", WEBHDFS_MODULE_PATH)):
+        with open(path, "r", encoding="utf-8") as f:
+            container_files[name] = f.read()
+    # Plus whatever the tap staged locally (config/catalog/state.json).
     for name in sorted(os.listdir(runtime_tmp_dir)):
         local_path = os.path.join(runtime_tmp_dir, name)
-        if not os.path.isfile(local_path):
-            continue
-        with open(local_path, "rb") as f:
-            hdfs_write_file(yarn_config, posixpath.join(hdfs_runtime_dir, name), f.read())
-        localized_files.append(name)
+        if os.path.isfile(local_path):
+            with open(local_path, "r", encoding="utf-8") as f:
+                container_files[name] = f.read()
+
+    # Owner-only dir; the uploaded files default to 600 in hdfs_write_file.
+    # Also where the helper writes stdout.
+    hdfs_mkdirs(yarn_config, hdfs_runtime_dir)
+    files_spec = []
+    for name, content in container_files.items():
+        dest_file = f"{CONTAINER_CONF_DIR}/{name}"
+        if name not in SECRET_FILES and _inline_safe(content):
+            files_spec.append({"type": "TEMPLATE", "dest_file": dest_file,
+                               "properties": {"content": content}})
+        else:
+            hdfs_write_file(yarn_config, posixpath.join(hdfs_runtime_dir, name), content)
+            files_spec.append({"type": "STATIC", "dest_file": dest_file,
+                               "src_file": posixpath.join(hdfs_runtime_dir, name)})
     service_hash = hashlib.sha256(f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{runtime_tmp_dir.split('/')[-1].split('-')[-1]}".encode()).hexdigest()
     service_name = f"{airbyte_image.split('/')[-1]}-{service_hash[:10]}"
     service_config = {
@@ -122,16 +134,10 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
             # The wrapper image's entrypoint is `["/bin/sh", "-c"]`; a bare
             # script path avoids quoting/tokenization issues in docker CMD.
             "launch_command": f"{CONTAINER_CONF_DIR}/launch.sh",
-            # YARN pulls these from HDFS and mounts them into the docker
-            # container at their absolute dest_file paths.
-            "files": [
-                {
-                    "type": "STATIC",
-                    "src_file": posixpath.join(hdfs_runtime_dir, name),
-                    "dest_file": f"{CONTAINER_CONF_DIR}/{name}",
-                }
-                for name in localized_files
-            ],
+            # YARN localizes these (from HDFS or rendered from inline
+            # content) and mounts them read-only into the docker container
+            # at their absolute dest_file paths.
+            "files": files_spec,
             "resource": {
               "cpus": 2,
               "memory": "1024"
@@ -162,7 +168,8 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     session = create_session(yarn_config)
     url = f"{yarn_config['base_url']}/app/v1/services"
     logger.debug('Creating YARN service %s...', service_name)
-    logger.debug('Config: %s', service_config) # tests
+    # Don't log the spec itself: inline file content and secret paths live in it.
+    logger.debug('Container files: %s', {f["dest_file"]: f["type"] for f in files_spec})
     response = session.post(url, json=service_config)
     logger.info(response.json())
     response.raise_for_status()
@@ -220,6 +227,24 @@ def kill_yarn_app(yarn_config: dict, app_id: str) -> None:
     response = session.put(url, json={"state": "KILLED"})
     response.raise_for_status()
     logger.info("Killed YARN application %s", app_id)
+
+
+def destroy_yarn_service(yarn_config: dict, app_id: str) -> None:
+    """
+    Destroy the YARN service behind app_id (stops it if still running) so
+    the AM-managed HDFS dir — ~/.yarn/services/<name>/, holding the spec
+    with inline file content and rendered copies of the TEMPLATE files —
+    doesn't pile up. Best effort: failures are logged, not raised.
+    """
+    try:
+        service_name = get_yarn_service_application_info(yarn_config, app_id)["name"]
+        session = create_session(yarn_config)
+        response = session.delete(f"{yarn_config['base_url']}/app/v1/services/{service_name}")
+        if response.status_code not in (200, 204, 404):
+            response.raise_for_status()
+        logger.info("Destroyed YARN service %s (%s)", service_name, app_id)
+    except Exception:  # pylint: disable=broad-except
+        logger.warning("Failed to destroy YARN service for %s", app_id, exc_info=True)
 
 
 def is_airbyte_app_running(yarn_config: dict, app_id: str) -> bool:

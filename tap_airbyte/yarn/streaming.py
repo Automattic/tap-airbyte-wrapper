@@ -5,6 +5,7 @@ from time import sleep, time
 import logging
 
 from tap_airbyte.yarn.service import (
+    destroy_yarn_service,
     get_yarn_service_application_info,
     is_airbyte_app_running,
     is_yarn_app_failed,
@@ -13,6 +14,12 @@ from tap_airbyte.yarn.service import (
 from tap_airbyte.yarn.webhdfs import hdfs_delete, hdfs_file_length, hdfs_read_file
 
 logger = logging.getLogger(__name__)
+
+# Per-run files that carry secrets (connector config, state cursors, WebHDFS
+# gateway auth token). YARN localizes them from the per-run HDFS dir into the
+# Airbyte container at CONTAINER_CONF_DIR; on HDFS they live only for the run.
+# Mirrors service.SECRET_FILES.
+CREDENTIAL_FILES = ("config.json", "state.json", "webhdfs.json")
 
 
 class TimeoutException(Exception):
@@ -42,7 +49,7 @@ def read_file(yarn_config: dict, file_path: str, position: int) -> int:
     """
     Read the HDFS file from the given byte offset, print the complete lines,
     and return the new offset. A missing or shorter-than-position file
-    (transient state mid `-put -f` commit) means "no new data yet".
+    (not created by the helper's first `appendToFile` yet) means "no new data yet".
     """
     length = hdfs_file_length(yarn_config, file_path)
     if length is None or length <= position:
@@ -73,8 +80,10 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
     except BaseException:
         # Keep the stdout file around for debugging a failed run, but drop
         # the files that can hold credentials.
-        for name in ("config.json", "catalog.json", "state.json"):
+        for name in CREDENTIAL_FILES:
             hdfs_delete(yarn_config, posixpath.join(hdfs_runtime_dir, name))
         raise
     else:
         hdfs_delete(yarn_config, hdfs_runtime_dir, recursive=True)
+    finally:
+        destroy_yarn_service(yarn_config, app_id)
