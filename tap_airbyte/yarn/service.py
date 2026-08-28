@@ -163,7 +163,7 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
                 "yarn.dispatcher.drain-events.timeout": 0
             }
         },
-        "queue": yarn_config.get('queue', 'default')
+        "queue": yarn_config.get('queue') or 'default'
     }
     session = create_session(yarn_config)
     url = f"{yarn_config['base_url']}/app/v1/services"

@@ -530,3 +530,35 @@ def test_run_yarn_service_inlines_helper_modules_verbatim(tmp_path, monkeypatch)
     webhdfs_src = files[f"{CONTAINER_CONF_DIR}/webhdfs.py"]["properties"]["content"]
     assert "import requests" not in webhdfs_src
     assert "from tap_airbyte" not in webhdfs_src
+
+# ---------------------------------------------------------------------------
+# yarn_config with declared-but-unset keys (meltano passes them as None)
+# ---------------------------------------------------------------------------
+
+def test_create_session_tolerates_none_extra_headers():
+    from tap_airbyte.yarn.session import create_session
+    session = create_session({**YARN_CONFIG, "extra_headers": None})
+    assert session.headers["Content-Type"] == "application/json"
+    assert session.auth.username == "u"
+
+
+def test_run_yarn_service_tolerates_none_optional_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("HDFS_PATH", "/tmp/.airbyte")
+    runtime_tmp_dir = tmp_path / "tmpabc123"
+    runtime_tmp_dir.mkdir()
+    config = {
+        "yarn_service_config": {**YARN_CONFIG, "extra_headers": None, "queue": None,
+                                "timeout": None, "webhdfs_base_url": None},
+        "airbyte_spec": {"image": "airbyte/source-slack"},
+    }
+    session = MagicMock()
+    session.post.return_value = _response(200, json_data={"uri": "v1/services/foo"})
+    with patch("tap_airbyte.yarn.service.hdfs_write_file") as mock_write, \
+            patch("tap_airbyte.yarn.service.hdfs_mkdirs"), \
+            patch("tap_airbyte.yarn.service.create_session", return_value=session), \
+            patch("tap_airbyte.yarn.service._get_yarn_service_app_id", return_value="app_1"):
+        run_yarn_service(config, "read", str(runtime_tmp_dir))
+    assert session.post.call_args.kwargs["json"]["queue"] == "default"
+    creds = json.loads(next(c.args[2] for c in mock_write.call_args_list if c.args[1].endswith("webhdfs.json")))
+    assert creds["extra_headers"] == {}
+    assert creds["base_url"] == "https://gateway.example.com"  # webhdfs_base_url None -> base_url

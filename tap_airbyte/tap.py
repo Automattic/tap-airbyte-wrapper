@@ -210,6 +210,14 @@ class TapAirbyte(Tap):
                     description="Extra headers to pass to the YARN"
                 ),
                 th.Property(
+                    "webhdfs_base_url",
+                    th.StringType,
+                    required=False,
+                    description="Base URL of the WebHDFS endpoint (the tap appends /webhdfs/v1). "
+                                "Defaults to base_url; set it when WebHDFS is served from a "
+                                "different path or host than the YARN RM API (e.g. behind Knox).",
+                ),
+                th.Property(
                     "queue",
                     th.StringType,
                     default="default",
@@ -395,7 +403,7 @@ class TapAirbyte(Tap):
         wait_for_file(hdfs_output_path,
                       yarn_config=self.config["yarn_service_config"],
                       app_id=app_id,
-                      timeout=int(self.config["yarn_service_config"].get("timeout", 600)))
+                      timeout=int(self.config["yarn_service_config"].get("timeout") or 600))
         self.logger.debug("File %s created. Streaming file and Waiting for the YARN application to finish.", hdfs_output_path)
         return [sys.executable, Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/stream_output.py', "--app_id",
                 app_id, "--yarn_config", orjson.dumps(self.config["yarn_service_config"]),

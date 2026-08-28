@@ -22,5 +22,6 @@ class YarnApplicationInfo(TypedDict):
 def create_session(yarn_config: YarnConfig) -> Session:
     session = requests.Session()
     session.auth = HTTPBasicAuth(yarn_config['username'], yarn_config['password'])
-    session.headers.update({"Content-Type": "application/json"} | yarn_config.get('extra_headers', {}))
+    # `or {}`: a declared-but-unset setting arrives from meltano as None, not missing.
+    session.headers.update({"Content-Type": "application/json"} | (yarn_config.get('extra_headers') or {}))
     return session
