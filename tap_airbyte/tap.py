@@ -416,9 +416,9 @@ class TapAirbyte(Tap):
                       app_id=app_id,
                       timeout=int(self.config["yarn_service_config"].get("timeout") or 600))
         self.logger.debug("File %s created. Streaming file and Waiting for the YARN application to finish.", hdfs_output_path)
-        return [sys.executable, Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/stream_output.py', "--app_id",
-                app_id, "--yarn_config", orjson.dumps(self.config["yarn_service_config"]),
-                hdfs_output_path]
+        return [sys.executable, str(Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/stream_output.py'),
+                "--app_id", app_id, "--yarn_config",
+                orjson.dumps(self.config["yarn_service_config"]).decode(), hdfs_output_path]
 
 
     def to_command(
