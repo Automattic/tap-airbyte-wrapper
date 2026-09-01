@@ -34,6 +34,8 @@ try:
 except ImportError:  # running as a bare script inside the container
     from webhdfs import WebHdfsClient, WebHdfsError
 
+# Hand-rolled retry (no tenacity): nothing is pip-installed in the Airbyte
+# image, this file must stay stdlib-only (see module docstring).
 RETRY_BACKOFF = (10, 20, 40)
 DEFAULT_COMMIT_INTERVAL = 20.0
 CHUNK_SIZE = 1 << 20

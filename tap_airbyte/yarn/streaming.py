@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 # Per-run files that carry secrets (connector config, state cursors, WebHDFS
 # gateway auth token). YARN localizes them from the per-run HDFS dir into the
 # Airbyte container at CONTAINER_CONF_DIR; on HDFS they live only for the run.
+# HDFS is the only clean channel into the container: STATIC localization needs
+# `src_file` on HDFS, and inlining content in the service spec instead would
+# get it logged by the AM at INFO and persisted under ~/.yarn/services/. The
+# uploads are 600 inside a 700 dir and deleted here as soon as the run ends.
 CREDENTIAL_FILES = ("config.json", "state.json", "webhdfs.json")
 
 
