@@ -25,8 +25,8 @@ CONTAINER_CONF_DIR = "/tmp/airbyte"
 
 # Run inside the Airbyte container: helper.py relays main.py's stdout to HDFS
 # with incremental WebHDFS CREATE/APPEND commits, using the same webhdfs.py
-# client as this side. Both are shipped verbatim (stdlib-only) as inline
-# TEMPLATE content in the service spec; see the module docstring in helper.py.
+# client as this side. Both are uploaded verbatim (stdlib-only) to the per-run
+# HDFS dir; see the module docstring in helper.py.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 HELPER_PATH = os.path.join(_HERE, "helper.py")
 WEBHDFS_MODULE_PATH = os.path.join(_HERE, "webhdfs.py")
@@ -34,24 +34,11 @@ WEBHDFS_MODULE_PATH = os.path.join(_HERE, "webhdfs.py")
 # removed with it on failure (see streaming.CREDENTIAL_FILES).
 WEBHDFS_CREDENTIALS_FILE = "webhdfs.json"
 
-# How each file reaches the container:
-#  - secrets (connector config, state cursors, gateway token): uploaded to the
-#    per-run HDFS dir as 600 and listed as STATIC — the AM localizes them
-#    without ever logging or copying their content.
-#  - everything else: inlined in the service spec as TEMPLATE `content`, which
-#    the AM renders itself. Cheaper (no upload), but the AM logs the rendered
-#    ConfigFile (properties included) at INFO and keeps a copy under
-#    ~/.yarn/services/<name>/ until the service is destroyed — fine for code
-#    and catalogs, never for secrets.
-SECRET_FILES = {"config.json", "state.json", WEBHDFS_CREDENTIALS_FILE}
-
+# Every file is uploaded to the per-run HDFS dir (600, owner-only dir) and
+# localized as STATIC: the AM never logs or copies file content that way
+# (inline TEMPLATE content gets logged at INFO and persisted in the spec),
+# and the service spec stays small regardless of catalog size.
 PROXY_ENV_VARS = ("http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
-
-
-def _inline_safe(content: str) -> bool:
-    """The AM substitutes `${TOKEN}` / `{{key}}` in TEMPLATE content; refuse
-    to inline anything that could be mangled and upload it instead."""
-    return "${" not in content and "{{" not in content
 
 
 def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: str) -> tuple[str, str]:
@@ -110,14 +97,10 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     hdfs_mkdirs(yarn_config, hdfs_runtime_dir)
     files_spec = []
     for name, content in container_files.items():
-        dest_file = f"{CONTAINER_CONF_DIR}/{name}"
-        if name not in SECRET_FILES and _inline_safe(content):
-            files_spec.append({"type": "TEMPLATE", "dest_file": dest_file,
-                               "properties": {"content": content}})
-        else:
-            hdfs_write_file(yarn_config, posixpath.join(hdfs_runtime_dir, name), content)
-            files_spec.append({"type": "STATIC", "dest_file": dest_file,
-                               "src_file": posixpath.join(hdfs_runtime_dir, name)})
+        hdfs_path = posixpath.join(hdfs_runtime_dir, name)
+        hdfs_write_file(yarn_config, hdfs_path, content)
+        files_spec.append({"type": "STATIC", "dest_file": f"{CONTAINER_CONF_DIR}/{name}",
+                           "src_file": hdfs_path})
     service_hash = hashlib.sha256(f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{runtime_tmp_dir.split('/')[-1].split('-')[-1]}".encode()).hexdigest()
     service_name = f"{airbyte_image.split('/')[-1]}-{service_hash[:10]}"
     service_config = {
@@ -237,9 +220,8 @@ def kill_yarn_app(yarn_config: dict, app_id: str) -> None:
 def destroy_yarn_service(yarn_config: dict, app_id: str) -> None:
     """
     Destroy the YARN service behind app_id (stops it if still running) so
-    the AM-managed HDFS dir — ~/.yarn/services/<name>/, holding the spec
-    with inline file content and rendered copies of the TEMPLATE files —
-    doesn't pile up. Best effort: failures are logged, not raised.
+    the AM-managed HDFS dir — ~/.yarn/services/<name>/, holding the service
+    spec — doesn't pile up. Best effort: failures are logged, not raised.
     """
     try:
         service_name = get_yarn_service_application_info(yarn_config, app_id)["name"]

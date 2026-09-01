@@ -419,27 +419,20 @@ def test_run_yarn_service_uploads_files_and_localizes_them(submit_service):
     # Run dir created owner-only before any upload.
     run.mkdirs.assert_called_once_with(YARN_CONFIG, "/tmp/.airbyte/tmpabc123")
 
-    # Only the secret-bearing files are uploaded over WebHDFS (600) and
-    # localized as STATIC; the rest is inlined in the spec as TEMPLATE
-    # content, which the AM logs and keeps a copy of.
-    assert set(run.uploads) == {"/tmp/.airbyte/tmpabc123/webhdfs.json", "/tmp/.airbyte/tmpabc123/config.json"}
+    # Every file is uploaded over WebHDFS (600) and localized as STATIC —
+    # nothing is inlined in the spec (the AM logs inline content).
+    assert set(run.uploads) == {f"/tmp/.airbyte/tmpabc123/{name}" for name in
+                                ("helper.py", "webhdfs.py", "webhdfs.json", "launch.sh", "config.json", "catalog.json")}
     # Only the Basic token reaches the container, never username/password.
     creds = json.loads(run.uploads["/tmp/.airbyte/tmpabc123/webhdfs.json"])
     assert creds["authorization"] == "Basic dTpw"
     assert "password" not in creds
 
-    assert set(run.files) == {f"{CONTAINER_CONF_DIR}/{name}" for name in
-                              ("helper.py", "webhdfs.py", "webhdfs.json", "launch.sh", "config.json", "catalog.json")}
-    for name in ("webhdfs.json", "config.json"):
-        assert run.files[f"{CONTAINER_CONF_DIR}/{name}"] == {
-            "type": "STATIC", "dest_file": f"{CONTAINER_CONF_DIR}/{name}",
-            "src_file": f"/tmp/.airbyte/tmpabc123/{name}"}
-    for name in ("helper.py", "webhdfs.py", "launch.sh", "catalog.json"):
-        entry = run.files[f"{CONTAINER_CONF_DIR}/{name}"]
-        assert entry["type"] == "TEMPLATE" and "src_file" not in entry
-        assert set(entry["properties"]) == {"content"}
-    assert run.files[f"{CONTAINER_CONF_DIR}/catalog.json"]["properties"]["content"] == "{}"
-    launch_script = run.files[f"{CONTAINER_CONF_DIR}/launch.sh"]["properties"]["content"]
+    assert run.files == {f"{CONTAINER_CONF_DIR}/{name}": {
+        "type": "STATIC", "dest_file": f"{CONTAINER_CONF_DIR}/{name}",
+        "src_file": f"/tmp/.airbyte/tmpabc123/{name}"}
+        for name in ("helper.py", "webhdfs.py", "webhdfs.json", "launch.sh", "config.json", "catalog.json")}
+    launch_script = run.uploads["/tmp/.airbyte/tmpabc123/launch.sh"]
     assert (f"python -u {CONTAINER_CONF_DIR}/helper.py /tmp/.airbyte/tmpabc123/stdout-read "
             f"{CONTAINER_CONF_DIR}/webhdfs.json") in launch_script
     assert f"python -u main.py {command} >/tmp/airbyte_pipe" in launch_script
@@ -461,35 +454,21 @@ def test_run_yarn_service_never_logs_spec_or_secrets(submit_service, caplog):
     assert "dTpw" not in caplog.text
 
 
-def test_run_yarn_service_uploads_files_the_am_would_mangle(submit_service):
-    """TEMPLATE content goes through the AM's ${TOKEN} / {{key}} substitution;
-    a non-secret file containing such markers must be uploaded as STATIC instead."""
-    run = submit_service(files={"catalog.json": '{"name": "${USER}-stream"}'})
-    assert "/tmp/.airbyte/tmpabc123/catalog.json" in run.uploads
-    assert run.files[f"{CONTAINER_CONF_DIR}/catalog.json"]["type"] == "STATIC"
-
-
 def test_run_yarn_service_defaults_hdfs_base_to_user_home(submit_service):
     """Without HDFS_PATH, stage under the submitting user's HDFS home
     rather than a global /tmp path."""
     assert submit_service(hdfs_path=None).hdfs_output_path == "/user/u/.airbyte/tmpabc123/stdout-read"
 
 
-def test_run_yarn_service_inlines_helper_modules_verbatim(submit_service):
-    """helper.py / webhdfs.py inlined in the spec must be the modules shipped
-    in the package, byte for byte, and free of template markers."""
+def test_run_yarn_service_uploads_helper_modules_verbatim(submit_service):
+    """helper.py / webhdfs.py uploaded to HDFS must be the modules shipped
+    in the package, byte for byte."""
     run = submit_service()
-    assert not any(path.endswith((".py", "launch.sh")) for path in run.uploads)
     for name, path in (("helper.py", HELPER_PATH), ("webhdfs.py", WEBHDFS_MODULE_PATH)):
         with open(path, "r", encoding="utf-8") as f:
-            source = f.read()
-        entry = run.files[f"{CONTAINER_CONF_DIR}/{name}"]
-        assert entry["type"] == "TEMPLATE"
-        assert entry["properties"]["content"] == source
-        # Would be silently rewritten by the AM's substitution pass.
-        assert "${" not in source and "{{" not in source
+            assert run.uploads[f"/tmp/.airbyte/tmpabc123/{name}"] == f.read()
     # The in-container module must not depend on the package or third parties.
-    webhdfs_src = run.files[f"{CONTAINER_CONF_DIR}/webhdfs.py"]["properties"]["content"]
+    webhdfs_src = run.uploads["/tmp/.airbyte/tmpabc123/webhdfs.py"]
     assert "import requests" not in webhdfs_src
     assert "from tap_airbyte" not in webhdfs_src
 

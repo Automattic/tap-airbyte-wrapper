@@ -19,10 +19,9 @@ lease soft limit left behind by a crashed append client. SIGTERM (docker
 stop / YARN kill grace period) triggers one last commit.
 
 No Hadoop CLI/JVM needed in the image: only python (3.9+ assumed) and
-network access to the WebHDFS gateway. Keep this file stdlib-only and free
-of dollar-brace / double-brace template markers (the YARN AM runs token
-substitution over it): it is shipped verbatim together with webhdfs.py as
-inline content in the service spec.
+network access to the WebHDFS gateway. Keep this file stdlib-only: it is
+uploaded verbatim together with webhdfs.py to the per-run HDFS dir and
+localized into the container.
 """
 import os
 import signal

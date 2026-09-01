@@ -8,12 +8,10 @@ https://hadoop.apache.org/docs/r3.3.6/hadoop-project-dist/hadoop-hdfs/WebHDFS.ht
 Error mapping used here: FileNotFoundException -> 404, IOException (incl.
 FileAlreadyExistsException, AlreadyBeingCreatedException) -> 403.
 
-Keep this module stdlib-only, free of package imports, and free of
-dollar-brace / double-brace template markers (the YARN AM runs token
-substitution over it): it is shipped into the
-Airbyte container next to helper.py as inline service-spec content and
-imported there as a bare module, so the same client serves both sides
-(Meltano and the in-container relay).
+Keep this module stdlib-only and free of package imports: it is uploaded
+into the Airbyte container next to helper.py and imported there as a bare
+module, so the same client serves both sides (Meltano and the in-container
+relay).
 
 TLS: the gateway certificate is verified against the system CA store of
 whichever image runs the client.

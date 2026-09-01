@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 # Per-run files that carry secrets (connector config, state cursors, WebHDFS
 # gateway auth token). YARN localizes them from the per-run HDFS dir into the
 # Airbyte container at CONTAINER_CONF_DIR; on HDFS they live only for the run.
-# Mirrors service.SECRET_FILES.
 CREDENTIAL_FILES = ("config.json", "state.json", "webhdfs.json")
 
 
