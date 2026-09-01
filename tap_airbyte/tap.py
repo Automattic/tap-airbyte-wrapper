@@ -25,7 +25,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from functools import lru_cache
-from pathlib import Path, PurePath
+from pathlib import Path
 from queue import Empty, Queue
 from tempfile import TemporaryDirectory
 from threading import Lock, Thread
@@ -39,7 +39,8 @@ import virtualenv
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
 
-from tap_airbyte.yarn.main import run_yarn_service, wait_for_file, kill_yarn_app
+from tap_airbyte.yarn.service import CONTAINER_CONF_DIR, run_yarn_service, kill_yarn_app
+from tap_airbyte.yarn.streaming import delete_credential_files, wait_for_file
 
 # Sentinel value for broken pipe
 PIPE_CLOSED = object()
@@ -82,6 +83,14 @@ singer.write_message = write_message
 
 class AirbyteException(Exception):
     pass
+
+
+class _StagedRun(t.NamedTuple):
+    conf_dir: str
+    command_kwargs: dict
+
+    def path(self, name: str) -> str:
+        return f"{self.conf_dir}/{name}.json"
 
 
 class AirbyteMessage(str, Enum):
@@ -209,6 +218,14 @@ class TapAirbyte(Tap):
                     description="Extra headers to pass to the YARN"
                 ),
                 th.Property(
+                    "webhdfs_base_url",
+                    th.StringType,
+                    required=False,
+                    description="Base URL of the WebHDFS endpoint (the tap appends /webhdfs/v1). "
+                                "Defaults to base_url; set it when WebHDFS is served from a "
+                                "different path or host than the YARN RM API (e.g. behind Knox).",
+                ),
+                th.Property(
                     "queue",
                     th.StringType,
                     default="default",
@@ -218,10 +235,9 @@ class TapAirbyte(Tap):
                     "timeout",
                     th.IntegerType,
                     default=600,
-                    description="Timeout in seconds for the airbyte output file to be created and populated. "
-                                "FUSE can take a while to populate the file if the writes are frequent, so this is"
-                                " set to 600 seconds by default. You can adjust this value based on your needs."
-                                "If the file is not created within this time, the process will raise an exception.",
+                    description="Seconds to wait for the connector's first output to land on HDFS "
+                                "(covers container scheduling, image pull and the relay's first commit). "
+                                "Raises if nothing shows up in time.",
                 ),
             ),
             required=False,
@@ -230,7 +246,6 @@ class TapAirbyte(Tap):
         )
 
     ).to_dict()
-    airbyte_mount_dir: str = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
     pipe_status = None
     eof_received = None
     # Airbyte image to run
@@ -281,6 +296,24 @@ class TapAirbyte(Tap):
     def run_on_yarn(self) -> bool:
         """Check if the connector should be run on YARN."""
         return bool(self.config.get("yarn_service_config"))
+
+    @contextmanager
+    def _staged_run(self, **files: t.Any) -> t.Iterator[_StagedRun]:
+        """Write the given JSON documents (config=..., catalog=..., state=...)
+        into a per-run dir and yield how to reference them from the connector
+        command: `run.path("config")` is the path as the connector sees it,
+        `run.command_kwargs` are the to_command() arguments for this run."""
+        with TemporaryDirectory() as host_dir:
+            for name, document in files.items():
+                with open(f"{host_dir}/{name}.json", "wb") as f:
+                    f.write(orjson.dumps(document, default=default))
+            # Native runs read the host dir directly; containers see it at
+            # CONTAINER_CONF_DIR (YARN localization, or a docker bind mount).
+            conf_dir = host_dir if self.is_native() else CONTAINER_CONF_DIR
+            docker_args = [] if self.run_on_yarn else [
+                "--rm", "-i", "-v", f"{host_dir}:{CONTAINER_CONF_DIR}", *self.docker_mounts,
+            ]
+            yield _StagedRun(conf_dir, {"docker_args": docker_args, "runtime_tmp_dir": host_dir})
 
     @property
     def native_venv_path(self) -> Path:
@@ -376,14 +409,16 @@ class TapAirbyte(Tap):
         """
         Run the Airbyte connector on YARN and return the command to watch the output file.
         """
-        app_id, output_file = run_yarn_service(self.config, ' '.join(airbyte_cmd).replace(self.airbyte_mount_dir, runtime_tmp_dir), runtime_tmp_dir)
-        self.logger.debug("Waiting for the output file %s to be created.", output_file)
-        wait_for_file(os.path.join(runtime_tmp_dir, output_file),
-                      timeout=int(self.config["yarn_service_config"].get("timeout", 600)))
-        self.logger.debug("File %s created. Streaming file and Waiting for the YARN application to finish.", output_file)
-        return [sys.executable, Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/stream_output.py', "--app_id",
-                app_id, "--yarn_config", orjson.dumps(self.config["yarn_service_config"]),
-                os.path.join(runtime_tmp_dir, output_file)]
+        app_id, hdfs_output_path = run_yarn_service(self.config, ' '.join(airbyte_cmd), runtime_tmp_dir)
+        self.logger.debug("Waiting for the output file %s to be created.", hdfs_output_path)
+        wait_for_file(hdfs_output_path,
+                      yarn_config=self.config["yarn_service_config"],
+                      app_id=app_id,
+                      timeout=int(self.config["yarn_service_config"].get("timeout") or 600))
+        self.logger.debug("File %s created. Streaming file and Waiting for the YARN application to finish.", hdfs_output_path)
+        return [sys.executable, str(Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/stream_output.py'),
+                "--app_id", app_id, "--yarn_config",
+                orjson.dumps(self.config["yarn_service_config"]).decode(), hdfs_output_path]
 
 
     def to_command(
@@ -414,12 +449,12 @@ class TapAirbyte(Tap):
 
     def run_help(self) -> None:
         """Run the help command for the Airbyte connector."""
-        with TemporaryDirectory(dir=self.airbyte_mount_dir) as runtime_tmp_dir:
+        with TemporaryDirectory() as runtime_tmp_dir:
             subprocess.run(self.to_command("--help", runtime_tmp_dir=runtime_tmp_dir), check=True)
 
     def run_spec(self) -> t.Dict[str, t.Any]:
         """Run the spec command for the Airbyte connector."""
-        with TemporaryDirectory(dir=self.airbyte_mount_dir) as runtime_tmp_dir:
+        with TemporaryDirectory() as runtime_tmp_dir:
             proc = subprocess.run(
                 self.to_command("spec", runtime_tmp_dir=runtime_tmp_dir),
                 stdout=subprocess.PIPE,
@@ -473,24 +508,9 @@ class TapAirbyte(Tap):
 
     def run_check(self) -> bool:
         """Run the check command for the Airbyte connector."""
-        with TemporaryDirectory(dir=self.airbyte_mount_dir) as host_tmpdir:
-            with open(f"{host_tmpdir}/config.json", "wb") as f:
-                f.write(orjson.dumps(self.config.get("airbyte_config", {})))
-            runtime_conf_dir = host_tmpdir if self.is_native() else self.airbyte_mount_dir
+        with self._staged_run(config=self.config.get("airbyte_config", {})) as run:
             proc = subprocess.run(
-                self.to_command(
-                    "check",
-                    "--config",
-                    f"{runtime_conf_dir}/config.json",
-                    docker_args=[
-                        "--rm",
-                        "-i",
-                        "-v",
-                        f"{host_tmpdir}:{self.airbyte_mount_dir}",
-                        *self.docker_mounts,
-                    ],
-                    runtime_tmp_dir=host_tmpdir
-                ),
+                self.to_command("check", "--config", run.path("config"), **run.command_kwargs),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
@@ -535,39 +555,19 @@ class TapAirbyte(Tap):
     @contextmanager
     def run_read(self) -> t.Iterator[subprocess.Popen]:
         """Run the read command for the Airbyte connector."""
-        with TemporaryDirectory(dir=self.airbyte_mount_dir) as host_tmpdir:
-            with open(f"{host_tmpdir}/config.json", "wb") as config, open(f"{host_tmpdir}/catalog.json",
-                                                                          "wb") as catalog:
-                config.write(orjson.dumps(self.config.get("airbyte_config", {})))
-                catalog.write(orjson.dumps(self.configured_airbyte_catalog))
-            if self.airbyte_state:
-                with open(f"{host_tmpdir}/state.json", "wb") as state:
-                    # Use the new airbyte state container if it exists.
-                    state_dict = self.airbyte_state
-                    if 'airbyte_state' in self.airbyte_state:
-                        # This is airbyte state V2
-                        state_dict = self.airbyte_state['airbyte_state']
-
-                    self.logger.debug("Using state: %s", state_dict)
-                    state.write(orjson.dumps(state_dict, default=default))
-
-            runtime_conf_dir = host_tmpdir if self.is_native() else self.airbyte_mount_dir
+        files = {"config": self.config.get("airbyte_config", {}), "catalog": self.configured_airbyte_catalog}
+        if self.airbyte_state:
+            # Use the new airbyte state container (state V2) if it exists.
+            files["state"] = self.airbyte_state.get("airbyte_state", self.airbyte_state)
+            self.logger.debug("Using state: %s", files["state"])
+        with self._staged_run(**files) as run:
             proc = subprocess.Popen(
                 self.to_command(
                     "read",
-                    "--config",
-                    f"{runtime_conf_dir}/config.json",
-                    "--catalog",
-                    f"{runtime_conf_dir}/catalog.json",
-                    *(["--state", f"{runtime_conf_dir}/state.json"] if self.airbyte_state else []),
-                    docker_args=[
-                        "--rm",
-                        "-i",
-                        "-v",
-                        f"{host_tmpdir}:{self.airbyte_mount_dir}",
-                        *self.docker_mounts,
-                    ],
-                    runtime_tmp_dir=host_tmpdir
+                    "--config", run.path("config"),
+                    "--catalog", run.path("catalog"),
+                    *(["--state", run.path("state")] if self.airbyte_state else []),
+                    **run.command_kwargs,
                 ),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -582,6 +582,8 @@ class TapAirbyte(Tap):
                     if self.run_on_yarn and "--app_id" in proc.args:
                         app_id = proc.args[proc.args.index("--app_id") + 1]
                         kill_yarn_app(self.config["yarn_service_config"], app_id)
+                        # The watcher is about to be killed, so its own cleanup won't run.
+                        delete_credential_files(self.config["yarn_service_config"], str(proc.args[-1]))
                     proc.kill()
                     self.logger.warning("Airbyte process terminated before EOF message received.")
                 self.logger.debug("Waiting for Airbyte process to terminate.")
@@ -663,24 +665,9 @@ class TapAirbyte(Tap):
     @lru_cache(maxsize=None)
     def airbyte_catalog(self) -> t.Dict[str, t.Any]:
         """Get the Airbyte catalog."""
-        with TemporaryDirectory(dir=self.airbyte_mount_dir) as host_tmpdir:
-            with open(f"{host_tmpdir}/config.json", "wb") as f:
-                f.write(orjson.dumps(self.config.get("airbyte_config", {})))
-            runtime_conf_dir = host_tmpdir if self.is_native() else self.airbyte_mount_dir
+        with self._staged_run(config=self.config.get("airbyte_config", {})) as run:
             proc = subprocess.run(
-                self.to_command(
-                    "discover",
-                    "--config",
-                    f"{runtime_conf_dir}/config.json",
-                    docker_args=[
-                        "--rm",
-                        "-i",
-                        "-v",
-                        f"{host_tmpdir}:{self.airbyte_mount_dir}",
-                        *self.docker_mounts,
-                    ],
-                    runtime_tmp_dir=host_tmpdir
-                ),
+                self.to_command("discover", "--config", run.path("config"), **run.command_kwargs),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
