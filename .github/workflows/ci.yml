@@ -22,7 +22,7 @@ jobs:
   build:
     strategy:
       matrix:
-        py_version: ["3.11"]
+        py_version: ["3.12", "3.13"]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
