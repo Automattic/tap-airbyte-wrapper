@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tap_airbyte.yarn.service import (
-    CONTAINER_CONF_DIR, HELPER_PATH, WEBHDFS_MODULE_PATH, destroy_yarn_service, run_yarn_service,
+    CONTAINER_CONF_DIR, HELPER_PATH, WEBHDFS_MODULE_PATH, run_yarn_service,
 )
 from tap_airbyte.yarn.streaming import TimeoutException, read_file, stream_file, wait_for_file
 from tap_airbyte.yarn.webhdfs import (
@@ -302,8 +302,7 @@ def test_stream_file(mock_sleep):
     # Mock `is_airbyte_app_running` to return True twice, then False
     with patch("tap_airbyte.yarn.streaming.is_airbyte_app_running", side_effect=[True, True, False]) as mock_is_running, \
             patch("tap_airbyte.yarn.streaming.read_file", side_effect=[15, 30, 50]) as mock_read_file, \
-            patch("tap_airbyte.yarn.streaming.hdfs_delete") as mock_delete, \
-            patch("tap_airbyte.yarn.streaming.destroy_yarn_service") as mock_destroy:
+            patch("tap_airbyte.yarn.streaming.hdfs_delete") as mock_delete:
         stream_file(file_path, YARN_CONFIG, app_id)
 
         # Assert `is_airbyte_app_running` was called 3 times
@@ -318,18 +317,15 @@ def test_stream_file(mock_sleep):
         # Assert `sleep` was called the expected number of times
         assert mock_sleep.call_count == 3  # Two during the loop, one final sleep
 
-        # Clean run — the whole per-run HDFS scratch dir is removed and the
-        # service (and its ~/.yarn/services dir) destroyed.
+        # Clean run — the whole per-run HDFS scratch dir is removed.
         mock_delete.assert_called_once_with(YARN_CONFIG, "/tmp/.airbyte/run1", recursive=True)
-        mock_destroy.assert_called_once_with(YARN_CONFIG, app_id)
 
 
 def test_stream_file_on_failure_deletes_credential_files_keeps_stdout():
     file_path = "/tmp/.airbyte/run1/stdout-read"
     with patch("tap_airbyte.yarn.streaming.is_airbyte_app_running",
                side_effect=Exception("Yarn application app_123 failed.")), \
-            patch("tap_airbyte.yarn.streaming.hdfs_delete") as mock_delete, \
-            patch("tap_airbyte.yarn.streaming.destroy_yarn_service") as mock_destroy:
+            patch("tap_airbyte.yarn.streaming.hdfs_delete") as mock_delete:
         with pytest.raises(Exception, match="failed"):
             stream_file(file_path, YARN_CONFIG, "app_123")
 
@@ -339,24 +335,6 @@ def test_stream_file_on_failure_deletes_credential_files_keeps_stdout():
         "/tmp/.airbyte/run1/state.json",
         "/tmp/.airbyte/run1/webhdfs.json",
     ]
-    mock_destroy.assert_called_once_with(YARN_CONFIG, "app_123")
-
-
-def test_destroy_yarn_service_deletes_service_by_app_name():
-    session = MagicMock()
-    session.delete.return_value = _response(204)
-    with patch("tap_airbyte.yarn.service.get_yarn_service_application_info",
-               return_value={"name": "source-slack-abc", "state": "FINISHED"}), \
-            patch("tap_airbyte.yarn.service.create_session", return_value=session):
-        destroy_yarn_service(YARN_CONFIG, "app_1")
-    session.delete.assert_called_once_with("https://gateway.example.com/app/v1/services/source-slack-abc")
-
-
-def test_destroy_yarn_service_is_best_effort(caplog):
-    with patch("tap_airbyte.yarn.service.get_yarn_service_application_info",
-               side_effect=Exception("RM down")):
-        destroy_yarn_service(YARN_CONFIG, "app_1")  # must not raise
-    assert "Failed to destroy YARN service" in caplog.text
 
 
 # ---------------------------------------------------------------------------

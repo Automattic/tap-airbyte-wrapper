@@ -5,7 +5,6 @@ from time import sleep, time
 import logging
 
 from tap_airbyte.yarn.service import (
-    destroy_yarn_service,
     get_yarn_service_application_info,
     is_airbyte_app_running,
     is_yarn_app_failed,
@@ -92,5 +91,3 @@ def stream_file(file_path: str, yarn_config: dict, app_id: str) -> None:
         raise
     else:
         hdfs_delete(yarn_config, hdfs_runtime_dir, recursive=True)
-    finally:
-        destroy_yarn_service(yarn_config, app_id)

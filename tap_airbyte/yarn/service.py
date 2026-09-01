@@ -217,23 +217,6 @@ def kill_yarn_app(yarn_config: dict, app_id: str) -> None:
     logger.info("Killed YARN application %s", app_id)
 
 
-def destroy_yarn_service(yarn_config: dict, app_id: str) -> None:
-    """
-    Destroy the YARN service behind app_id (stops it if still running) so
-    the AM-managed HDFS dir — ~/.yarn/services/<name>/, holding the service
-    spec — doesn't pile up. Best effort: failures are logged, not raised.
-    """
-    try:
-        service_name = get_yarn_service_application_info(yarn_config, app_id)["name"]
-        session = create_session(yarn_config)
-        response = session.delete(f"{yarn_config['base_url']}/app/v1/services/{service_name}")
-        if response.status_code not in (200, 204, 404):
-            response.raise_for_status()
-        logger.info("Destroyed YARN service %s (%s)", service_name, app_id)
-    except Exception:  # pylint: disable=broad-except
-        logger.warning("Failed to destroy YARN service for %s", app_id, exc_info=True)
-
-
 def is_airbyte_app_running(yarn_config: dict, app_id: str) -> bool:
     app_info = get_yarn_service_application_info(yarn_config, app_id)
     logger.info(app_info)
