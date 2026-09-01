@@ -35,6 +35,10 @@ def test_weather_sync():
                     "user_agent": True,
                 },
             },
+            # Docker only: every airbyte-source-file release pins python <3.12,
+            # so the native venv can't be built on the pythons CI runs. The
+            # native path is covered by test_poke_sync_native.
+            "skip_native_check": True,
         },
         parse_env_config=True,
     )
