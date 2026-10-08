@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tap_airbyte.yarn.service import (
-    CONTAINER_CONF_DIR, HELPER_PATH, WEBHDFS_MODULE_PATH, run_yarn_service,
+    CONTAINER_CONF_DIR, HELPER_PATH, WEBHDFS_MODULE_PATH, YarnServiceStartTimeout,
+    _get_yarn_service_app_id, run_yarn_service,
 )
 from tap_airbyte.yarn.streaming import TimeoutException, read_file, stream_file, wait_for_file
 from tap_airbyte.yarn.webhdfs import (
@@ -507,3 +508,43 @@ def test_delete_credential_files_targets_secrets_only():
         "/tmp/.airbyte/run1/state.json",
         "/tmp/.airbyte/run1/webhdfs.json",
     ]
+
+
+# ---------------------------------------------------------------------------
+# _get_yarn_service_app_id
+# ---------------------------------------------------------------------------
+
+def _service_session(*states):
+    session = MagicMock()
+    session.get.side_effect = [_response(200, json_data=state) for state in states]
+    return session
+
+
+def test_get_yarn_service_app_id_returns_once_started():
+    session = _service_session({"id": "app_1", "state": "ACCEPTED"}, {"id": "app_1", "state": "STARTED"})
+    with patch("tap_airbyte.yarn.service.create_session", return_value=session):
+        assert _get_yarn_service_app_id(YARN_CONFIG, "v1/services/foo", timeout=60) == "app_1"
+
+
+def test_get_yarn_service_app_id_kills_app_and_raises_when_never_started():
+    """An app stuck queued (e.g. behind the queue's AM limit) must not block forever."""
+    session = MagicMock()
+    session.get.return_value = _response(200, json_data={"id": "app_1", "state": "ACCEPTED"})
+    with patch("tap_airbyte.yarn.service.create_session", return_value=session), \
+            patch("tap_airbyte.yarn.service.monotonic", side_effect=[0, 0, 30, 61]), \
+            patch("tap_airbyte.yarn.service.kill_yarn_app") as mock_kill:
+        with pytest.raises(YarnServiceStartTimeout, match="did not start after 60s"):
+            _get_yarn_service_app_id(YARN_CONFIG, "v1/services/foo", timeout=60)
+    mock_kill.assert_called_once_with(YARN_CONFIG, "app_1")
+    assert session.get.call_count == 2
+
+
+def test_get_yarn_service_app_id_raises_without_kill_when_no_app_id_yet():
+    session = MagicMock()
+    session.get.return_value = _response(200, json_data={"state": "ACCEPTED"})
+    with patch("tap_airbyte.yarn.service.create_session", return_value=session), \
+            patch("tap_airbyte.yarn.service.monotonic", side_effect=[0, 0, 61]), \
+            patch("tap_airbyte.yarn.service.kill_yarn_app") as mock_kill:
+        with pytest.raises(YarnServiceStartTimeout):
+            _get_yarn_service_app_id(YARN_CONFIG, "v1/services/foo", timeout=60)
+    mock_kill.assert_not_called()

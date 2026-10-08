@@ -3,7 +3,7 @@ import os
 import posixpath
 import textwrap
 from datetime import datetime
-from time import sleep
+from time import monotonic, sleep
 from typing import Mapping, Any
 import logging
 import hashlib
@@ -41,13 +41,22 @@ WEBHDFS_CREDENTIALS_FILE = "webhdfs.json"
 PROXY_ENV_VARS = ("http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
 
 
-def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: str) -> tuple[str, str]:
+class YarnServiceStartTimeout(Exception):
+    pass
+
+
+def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: str,
+                     timeout: float = 600) -> tuple[str, str]:
     """
     Run a service on YARN with the given command.
 
     Uploads everything the container needs (files staged in runtime_tmp_dir,
     plus the generated launch.sh and helper.py) to a per-run HDFS dir over
     WebHDFS; YARN localizes them into the container at CONTAINER_CONF_DIR.
+
+    Waits up to `timeout` seconds for the service to start; a service still
+    queued after that (e.g. the queue's AM resource limit is exhausted) has
+    its app killed and YarnServiceStartTimeout is raised.
 
     Returns the application id and the HDFS path of the stdout file.
     """
@@ -163,21 +172,28 @@ def run_yarn_service(config: Mapping[str, Any], command: str, runtime_tmp_dir: s
     response.raise_for_status()
     service_uri = response.json().get('uri')
     logger.debug('YARN service created with uri: %s', service_uri)
-    app_id = _get_yarn_service_app_id(yarn_config, service_uri)
+    app_id = _get_yarn_service_app_id(yarn_config, service_uri, timeout)
     logger.debug('YARN service running with app_id: %s', app_id)
     return app_id, hdfs_output_path
 
 
-def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str) -> str:
+def _get_yarn_service_app_id(yarn_config: YarnConfig, service_uri: str, timeout: float) -> str:
     """
-    Get the application id of a running service
+    Get the application id of a running service, waiting at most `timeout` seconds for it to start
     """
     session = create_session(yarn_config)
     url = f"{yarn_config.get('base_url')}/app/{service_uri}"
     app_id = None
     state = None
+    deadline = monotonic() + timeout
     logger.debug('Waiting for the application id...')
     while not app_id or state not in {'STARTED', 'SUCCEEDED'}:
+        if monotonic() >= deadline:
+            if app_id:
+                # Don't leave the Airbyte app queued: it would start later with nobody reading its output.
+                kill_yarn_app(yarn_config, app_id)
+            raise YarnServiceStartTimeout(
+                f"Yarn Service {service_uri} did not start after {timeout}s (app_id: {app_id}, state: {state})")
         logger.debug(f'APP_ID: {app_id}, STATE: {state}')
         response = session.get(url)
         app_info = response.json()
