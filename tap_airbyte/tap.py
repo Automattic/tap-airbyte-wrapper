@@ -40,7 +40,7 @@ from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
 
 from tap_airbyte.yarn.service import CONTAINER_CONF_DIR, run_yarn_service, kill_yarn_app
-from tap_airbyte.yarn.streaming import delete_credential_files, wait_for_file
+from tap_airbyte.yarn.streaming import TimeoutException, delete_credential_files, wait_for_file
 
 # Sentinel value for broken pipe
 PIPE_CLOSED = object()
@@ -409,12 +409,23 @@ class TapAirbyte(Tap):
         """
         Run the Airbyte connector on YARN and return the command to watch the output file.
         """
-        app_id, hdfs_output_path = run_yarn_service(self.config, ' '.join(airbyte_cmd), runtime_tmp_dir)
+        yarn_config = self.config["yarn_service_config"]
+        # One deadline for the whole start-up: getting scheduled (the app can sit queued
+        # behind the queue's AM limit) plus the connector's first output landing on HDFS.
+        timeout = int(yarn_config.get("timeout") or 600)
+        deadline = time.monotonic() + timeout
+        app_id, hdfs_output_path = run_yarn_service(self.config, ' '.join(airbyte_cmd), runtime_tmp_dir,
+                                                    timeout=timeout)
         self.logger.debug("Waiting for the output file %s to be created.", hdfs_output_path)
-        wait_for_file(hdfs_output_path,
-                      yarn_config=self.config["yarn_service_config"],
-                      app_id=app_id,
-                      timeout=int(self.config["yarn_service_config"].get("timeout") or 600))
+        try:
+            wait_for_file(hdfs_output_path,
+                          yarn_config=yarn_config,
+                          app_id=app_id,
+                          timeout=max(deadline - time.monotonic(), 0))
+        except TimeoutException:
+            # Fail the tap, but don't leave the Airbyte app running with nobody reading it.
+            kill_yarn_app(yarn_config, app_id)
+            raise
         self.logger.debug("File %s created. Streaming file and Waiting for the YARN application to finish.", hdfs_output_path)
         return [sys.executable, str(Path(os.path.dirname(os.path.abspath(__file__))) / 'yarn/stream_output.py'),
                 "--app_id", app_id, "--yarn_config",
