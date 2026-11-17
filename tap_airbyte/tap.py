@@ -45,6 +45,10 @@ from tap_airbyte.yarn.streaming import TimeoutException, delete_credential_files
 # Sentinel value for broken pipe
 PIPE_CLOSED = object()
 
+# Signals to a downstream target that the sync failed part-way and buffered
+# records must not be committed. See write_abort_message().
+ABORT_MESSAGE = b'{"type": "ABORT"}\n'
+
 
 def default(obj):
     if isinstance(obj, (datetime, date)):
@@ -79,6 +83,26 @@ def write_message(message) -> None:
 
 STDOUT_LOCK = Lock()
 singer.write_message = write_message
+
+
+def write_abort_message() -> None:
+    """Tell a downstream target this sync is incomplete so it discards buffered records.
+
+    Singer has no end-of-stream message, so a target's only completion signal is its
+    stdin closing -- and Meltano closes it cleanly even when the tap exits non-zero.
+    A target that buffers a full-refresh stream in memory therefore commits a partial
+    overwrite as if it were a complete one. ABORT is not a type any target implements,
+    and the Singer SDK raises on an unrecognized type while reading lines, which stops
+    the target before it reaches end-of-pipe handling.
+    """
+    if TapAirbyte.pipe_status is PIPE_CLOSED:
+        return
+    try:
+        sys.stdout.buffer.write(ABORT_MESSAGE)
+        sys.stdout.buffer.flush()
+    except OSError as e:
+        # Logged, not raised: this runs while a failure is already propagating.
+        TapAirbyte.logger.warning("Could not write ABORT message: %s", e)  # type: ignore
 
 
 class AirbyteException(Exception):
@@ -735,6 +759,14 @@ class TapAirbyte(Tap):
         self.airbyte_state = state
 
     def sync_all(self) -> None:
+        """Sync all streams, telling the target to discard its buffer if we fail."""
+        try:
+            self._sync_streams()
+        except BaseException:
+            write_abort_message()
+            raise
+
+    def _sync_streams(self) -> None:
         """Sync all streams from the Airbyte source."""
         stream: Stream
         self.eof_received = False
