@@ -48,7 +48,12 @@ PIPE_CLOSED = object()
 
 # Signals to a downstream target that the sync failed part-way and buffered
 # records must not be committed. See write_abort_message().
-ABORT_MESSAGE = b'{"type": "ABORT"}\n'
+ABORT_MESSAGE_TYPE = "ABORT"
+
+# AirbyteException embeds the connector's stderr, which can be megabytes. Meltano
+# forwards tap stdout through a line-length-limited reader, so an untruncated
+# reason would trip that limit instead of aborting the target.
+MAX_ABORT_REASON_CHARS = 2000
 
 
 def default(obj):
@@ -89,7 +94,15 @@ singer.write_message = write_message
 _abort_written = False
 
 
-def write_abort_message() -> None:
+def abort_message(reason: str = "") -> bytes:
+    """Build an ABORT message, carrying why the sync stopped when we know it."""
+    payload: t.Dict[str, str] = {"type": ABORT_MESSAGE_TYPE}
+    if reason:
+        payload["reason"] = reason[:MAX_ABORT_REASON_CHARS]
+    return orjson.dumps(payload, option=TapAirbyte.ORJSON_OPTS, default=default)
+
+
+def write_abort_message(reason: str = "") -> None:
     """Tell a downstream target this sync is incomplete so it discards buffered records.
 
     Singer has no end-of-stream message, so a target's only completion signal is its
@@ -104,7 +117,7 @@ def write_abort_message() -> None:
         return
     _abort_written = True
     try:
-        sys.stdout.buffer.write(ABORT_MESSAGE)
+        sys.stdout.buffer.write(abort_message(reason))
         sys.stdout.buffer.flush()
     except OSError as e:
         # Logged, not raised: this runs while a failure is already propagating.
@@ -118,7 +131,7 @@ def abort_on_signal(signum, _frame) -> t.NoReturn:
     clean EOF. Written here rather than left to the unwind because SystemExit can
     be delayed if the main thread is parked in a blocking read.
     """
-    write_abort_message()
+    write_abort_message(f"terminated by signal {signal.Signals(signum).name}")
     raise SystemExit(128 + signum)
 
 
@@ -780,8 +793,8 @@ class TapAirbyte(Tap):
         previous_sigterm = signal.signal(signal.SIGTERM, abort_on_signal)
         try:
             self._sync_streams()
-        except BaseException:
-            write_abort_message()
+        except BaseException as e:
+            write_abort_message(f"{type(e).__name__}: {e}")
             raise
         finally:
             signal.signal(signal.SIGTERM, previous_sigterm)

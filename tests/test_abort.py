@@ -26,9 +26,10 @@ from singer_sdk.target_base import Target
 
 from tap_airbyte import tap as tap_module
 from tap_airbyte.tap import (
-    ABORT_MESSAGE,
+    MAX_ABORT_REASON_CHARS,
     PIPE_CLOSED,
     TapAirbyte,
+    abort_message,
     abort_on_signal,
     write_abort_message,
 )
@@ -87,8 +88,12 @@ def test_abort_message_stops_target_before_it_commits():
     committed: list = []
     target = _buffering_target(committed)
 
+    reason = "AirbyteException: Airbyte process failed with return code 1"
+    payload = abort_message(reason).decode()
+    assert reason in payload, "reason should travel with the message"
+
     with pytest.raises(ValueError, match="ABORT"):
-        target.listen(io.StringIO(SCHEMA + RECORD + ABORT_MESSAGE.decode()))
+        target.listen(io.StringIO(SCHEMA + RECORD + payload))
 
     assert committed == []
 
@@ -96,7 +101,7 @@ def test_abort_message_stops_target_before_it_commits():
 def test_sync_all_writes_abort_and_reraises(monkeypatch):
     """A failing sync must emit ABORT and still propagate the original error."""
     calls: list = []
-    monkeypatch.setattr(tap_module, "write_abort_message", lambda: calls.append("abort"))
+    monkeypatch.setattr(tap_module, "write_abort_message", lambda reason="": calls.append(reason))
 
     class AirbyteDied(Exception):
         pass
@@ -109,12 +114,12 @@ def test_sync_all_writes_abort_and_reraises(monkeypatch):
     with pytest.raises(AirbyteDied):
         TapAirbyte.sync_all(fake_tap)
 
-    assert calls == ["abort"]
+    assert calls == ["AirbyteDied: Airbyte process failed with return code 1"]
 
 
 def test_sync_all_writes_no_abort_on_success(monkeypatch):
     calls: list = []
-    monkeypatch.setattr(tap_module, "write_abort_message", lambda: calls.append("abort"))
+    monkeypatch.setattr(tap_module, "write_abort_message", lambda reason="": calls.append(reason))
 
     fake_tap = types.SimpleNamespace(_sync_streams=lambda: None)
     TapAirbyte.sync_all(fake_tap)
@@ -129,8 +134,8 @@ def test_write_abort_message_emits_sentinel(monkeypatch):
 
     write_abort_message()
 
-    assert buffer.getvalue() == ABORT_MESSAGE
-    assert ABORT_MESSAGE.endswith(b"\n"), "target reads line by line"
+    assert buffer.getvalue() == abort_message()
+    assert buffer.getvalue().endswith(b"\n"), "target reads line by line"
 
 
 def test_write_abort_message_skipped_when_pipe_closed(monkeypatch):
@@ -150,10 +155,10 @@ def test_write_abort_message_is_idempotent(monkeypatch):
     buffer = io.BytesIO()
     monkeypatch.setattr(tap_module.sys, "stdout", types.SimpleNamespace(buffer=buffer))
 
-    write_abort_message()
-    write_abort_message()
+    write_abort_message("first")
+    write_abort_message("second")
 
-    assert buffer.getvalue() == ABORT_MESSAGE
+    assert buffer.getvalue() == abort_message("first")
 
 
 def test_abort_on_signal_emits_and_exits(monkeypatch):
@@ -165,7 +170,7 @@ def test_abort_on_signal_emits_and_exits(monkeypatch):
         abort_on_signal(signal.SIGTERM, None)
 
     assert excinfo.value.code == 128 + signal.SIGTERM
-    assert buffer.getvalue() == ABORT_MESSAGE
+    assert json.loads(buffer.getvalue())["reason"] == "terminated by signal SIGTERM"
 
 
 def test_sigterm_during_sync_emits_abort(tmp_path):
@@ -202,5 +207,15 @@ def test_sigterm_during_sync_emits_abort(tmp_path):
             proc.kill()
             proc.communicate()
 
-    assert stdout == ABORT_MESSAGE, f"expected ABORT on stdout, got {stdout!r}"
+    message = json.loads(stdout)
+    assert message["type"] == "ABORT", f"expected ABORT on stdout, got {stdout!r}"
+    assert message["reason"] == "terminated by signal SIGTERM"
     assert proc.returncode == 128 + signal.SIGTERM
+
+
+def test_abort_reason_is_truncated():
+    """AirbyteException embeds connector stderr; an untruncated line would trip
+    Meltano's line-length limit instead of aborting the target."""
+    message = json.loads(abort_message("x" * (MAX_ABORT_REASON_CHARS * 3)))
+
+    assert len(message["reason"]) == MAX_ABORT_REASON_CHARS
