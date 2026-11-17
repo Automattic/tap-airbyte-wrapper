@@ -16,6 +16,7 @@ from copy import deepcopy
 import errno
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -85,6 +86,9 @@ STDOUT_LOCK = Lock()
 singer.write_message = write_message
 
 
+_abort_written = False
+
+
 def write_abort_message() -> None:
     """Tell a downstream target this sync is incomplete so it discards buffered records.
 
@@ -95,14 +99,27 @@ def write_abort_message() -> None:
     and the Singer SDK raises on an unrecognized type while reading lines, which stops
     the target before it reaches end-of-pipe handling.
     """
-    if TapAirbyte.pipe_status is PIPE_CLOSED:
+    global _abort_written
+    if _abort_written or TapAirbyte.pipe_status is PIPE_CLOSED:
         return
+    _abort_written = True
     try:
         sys.stdout.buffer.write(ABORT_MESSAGE)
         sys.stdout.buffer.flush()
     except OSError as e:
         # Logged, not raised: this runs while a failure is already propagating.
         TapAirbyte.logger.warning("Could not write ABORT message: %s", e)  # type: ignore
+
+
+def abort_on_signal(signum, _frame) -> t.NoReturn:
+    """Abort on SIGTERM, which terminates Python without unwinding the stack.
+
+    Without this, sync_all's except clause never runs and the target would read a
+    clean EOF. Written here rather than left to the unwind because SystemExit can
+    be delayed if the main thread is parked in a blocking read.
+    """
+    write_abort_message()
+    raise SystemExit(128 + signum)
 
 
 class AirbyteException(Exception):
@@ -760,11 +777,14 @@ class TapAirbyte(Tap):
 
     def sync_all(self) -> None:
         """Sync all streams, telling the target to discard its buffer if we fail."""
+        previous_sigterm = signal.signal(signal.SIGTERM, abort_on_signal)
         try:
             self._sync_streams()
         except BaseException:
             write_abort_message()
             raise
+        finally:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
     def _sync_streams(self) -> None:
         """Sync all streams from the Airbyte source."""

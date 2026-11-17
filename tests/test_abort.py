@@ -13,6 +13,10 @@
 
 import io
 import json
+import signal
+import subprocess
+import sys
+import textwrap
 import types
 
 import pytest
@@ -21,7 +25,20 @@ from singer_sdk.sinks import BatchSink
 from singer_sdk.target_base import Target
 
 from tap_airbyte import tap as tap_module
-from tap_airbyte.tap import ABORT_MESSAGE, PIPE_CLOSED, TapAirbyte, write_abort_message
+from tap_airbyte.tap import (
+    ABORT_MESSAGE,
+    PIPE_CLOSED,
+    TapAirbyte,
+    abort_on_signal,
+    write_abort_message,
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_abort_flag():
+    tap_module._abort_written = False
+    yield
+    tap_module._abort_written = False
 
 SCHEMA = json.dumps(
     {
@@ -125,3 +142,65 @@ def test_write_abort_message_skipped_when_pipe_closed(monkeypatch):
     write_abort_message()
 
     assert buffer.getvalue() == b""
+
+
+def test_write_abort_message_is_idempotent(monkeypatch):
+    """The signal handler and sync_all's except clause can both fire; emit once."""
+    monkeypatch.setattr(TapAirbyte, "pipe_status", None)
+    buffer = io.BytesIO()
+    monkeypatch.setattr(tap_module.sys, "stdout", types.SimpleNamespace(buffer=buffer))
+
+    write_abort_message()
+    write_abort_message()
+
+    assert buffer.getvalue() == ABORT_MESSAGE
+
+
+def test_abort_on_signal_emits_and_exits(monkeypatch):
+    monkeypatch.setattr(TapAirbyte, "pipe_status", None)
+    buffer = io.BytesIO()
+    monkeypatch.setattr(tap_module.sys, "stdout", types.SimpleNamespace(buffer=buffer))
+
+    with pytest.raises(SystemExit) as excinfo:
+        abort_on_signal(signal.SIGTERM, None)
+
+    assert excinfo.value.code == 128 + signal.SIGTERM
+    assert buffer.getvalue() == ABORT_MESSAGE
+
+
+def test_sigterm_during_sync_emits_abort(tmp_path):
+    """SIGTERM terminates Python without unwinding, so cover it end to end.
+
+    YARN container kills and Airflow task kills send SIGTERM before SIGKILL, so
+    this is the realistic abrupt-death path -- not a theoretical one.
+    """
+    child = tmp_path / "child.py"
+    child.write_text(textwrap.dedent("""
+        import sys, time, types
+        from tap_airbyte.tap import TapAirbyte
+
+        def block(self):
+            print("ready", file=sys.stderr, flush=True)
+            time.sleep(60)
+
+        TapAirbyte.sync_all(types.SimpleNamespace(
+            _sync_streams=types.MethodType(block, object())
+        ))
+    """))
+
+    proc = subprocess.Popen(
+        [sys.executable, str(child)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        assert proc.stderr.readline() == b"ready\n", "child never started syncing"
+        proc.send_signal(signal.SIGTERM)
+        stdout, _ = proc.communicate(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()
+
+    assert stdout == ABORT_MESSAGE, f"expected ABORT on stdout, got {stdout!r}"
+    assert proc.returncode == 128 + signal.SIGTERM
