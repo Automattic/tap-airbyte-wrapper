@@ -16,6 +16,7 @@ from copy import deepcopy
 import errno
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -44,6 +45,15 @@ from tap_airbyte.yarn.streaming import TimeoutException, delete_credential_files
 
 # Sentinel value for broken pipe
 PIPE_CLOSED = object()
+
+# Signals to a downstream target that the sync failed part-way and buffered
+# records must not be committed. See write_abort_message().
+ABORT_MESSAGE_TYPE = "ABORT"
+
+# AirbyteException embeds the connector's stderr, which can be megabytes. Meltano
+# forwards tap stdout through a line-length-limited reader, so an untruncated
+# reason would trip that limit instead of aborting the target.
+MAX_ABORT_REASON_CHARS = 2000
 
 
 def default(obj):
@@ -79,6 +89,50 @@ def write_message(message) -> None:
 
 STDOUT_LOCK = Lock()
 singer.write_message = write_message
+
+
+_abort_written = False
+
+
+def abort_message(reason: str = "") -> bytes:
+    """Build an ABORT message, carrying why the sync stopped when we know it."""
+    payload: t.Dict[str, str] = {"type": ABORT_MESSAGE_TYPE}
+    if reason:
+        payload["reason"] = reason[:MAX_ABORT_REASON_CHARS]
+    return orjson.dumps(payload, option=TapAirbyte.ORJSON_OPTS, default=default)
+
+
+def write_abort_message(reason: str = "") -> None:
+    """Tell a downstream target this sync is incomplete so it discards buffered records.
+
+    Singer has no end-of-stream message, so a target's only completion signal is its
+    stdin closing -- and Meltano closes it cleanly even when the tap exits non-zero.
+    A target that buffers a full-refresh stream in memory therefore commits a partial
+    overwrite as if it were a complete one. ABORT is not a type any target implements,
+    and the Singer SDK raises on an unrecognized type while reading lines, which stops
+    the target before it reaches end-of-pipe handling.
+    """
+    global _abort_written
+    if _abort_written or TapAirbyte.pipe_status is PIPE_CLOSED:
+        return
+    _abort_written = True
+    try:
+        sys.stdout.buffer.write(abort_message(reason))
+        sys.stdout.buffer.flush()
+    except OSError as e:
+        # Logged, not raised: this runs while a failure is already propagating.
+        TapAirbyte.logger.warning("Could not write ABORT message: %s", e)  # type: ignore
+
+
+def abort_on_signal(signum, _frame) -> t.NoReturn:
+    """Abort on SIGTERM, which terminates Python without unwinding the stack.
+
+    Without this, sync_all's except clause never runs and the target would read a
+    clean EOF. Written here rather than left to the unwind because SystemExit can
+    be delayed if the main thread is parked in a blocking read.
+    """
+    write_abort_message(f"terminated by signal {signal.Signals(signum).name}")
+    raise SystemExit(128 + signum)
 
 
 class AirbyteException(Exception):
@@ -735,6 +789,17 @@ class TapAirbyte(Tap):
         self.airbyte_state = state
 
     def sync_all(self) -> None:
+        """Sync all streams, telling the target to discard its buffer if we fail."""
+        previous_sigterm = signal.signal(signal.SIGTERM, abort_on_signal)
+        try:
+            self._sync_streams()
+        except BaseException as e:
+            write_abort_message(f"{type(e).__name__}: {e}")
+            raise
+        finally:
+            signal.signal(signal.SIGTERM, previous_sigterm)
+
+    def _sync_streams(self) -> None:
         """Sync all streams from the Airbyte source."""
         stream: Stream
         self.eof_received = False
